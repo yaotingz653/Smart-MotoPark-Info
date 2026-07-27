@@ -1,0 +1,27 @@
+# render.yaml — Smart MotoPark Info 完整部署設定
+# 包含前端 Static Site 與後端 Express Web Service
+
+services:
+  # ---- 前端 Static Site ----
+  - type: web
+    name: smart-motopark-frontend
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    plan: free
+    routes:
+      # NOTE: SPA 需要將所有路徑都 fallback 到 index.html
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # IMPORTANT: VITE_ 開頭的環境變數會在 build 時注入 JS bundle，必須在 Render Dashboard 手動填入
+      - key: VITE_SUPABASE_URL
+        sync: false          # 請在 Render Dashboard 填入：https://mlxkzuceamdekinwthyg.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false          # 請在 Render Dashboard 填入正確的 anon (public) key，不可用 service_role key
+      - key: VITE_GOOGLE_MAPS_API_KEY
+        sync: false          # 請在 Render Dashboard 填入 Google Maps API Key
+      - key: VITE_API_BASE_URL
+        sync: false          # 填入後端 Web Service 的 onrender.com 網址，若無後端可留空
+
