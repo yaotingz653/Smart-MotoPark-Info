@@ -661,15 +661,6 @@ export default function App() {
                   });
                 }}
                 onScanClick={() => {
-                  const occupiedSpot = spots.find(s => s.status === 'mine');
-                  if (occupiedSpot) {
-                    openModal({
-                      type: 'alert',
-                      title: '您已有停車中的車位',
-                      message: `您目前已停在車位 ${occupiedSpot.number}，請先釋放該車位後再進行掃碼預約新車位。`
-                    });
-                    return;
-                  }
                   setIsScanning(true);
                 }}
                 spotsError={spotsError}
@@ -693,6 +684,7 @@ export default function App() {
                 spots={spots}
                 startTime={startTime}
                 vehicleType={vehicleType}
+                onScanClick={() => setIsScanning(true)}
                 onViewOnMap={(num, origin) => {
                   setSearchQuery(num);
                   setView('map');
@@ -2085,12 +2077,13 @@ const ORIGIN_OPTIONS: { value: OriginOption; label: string; icon: string; origin
   { value: 'gps', label: '目前真實定位', icon: '📍', origin: 'gps' },
 ];
 
-function StatusView({ spots, startTime, endTime, onViewOnMap, onRelease, vehicleType }: {
+function StatusView({ spots, startTime, endTime, onViewOnMap, onRelease, onScanClick, vehicleType }: {
   spots: ParkingSpot[],
   startTime: Date | null,
   endTime?: Date | null,
   onViewOnMap: (num: string, origin: { lat: number; lng: number } | 'gps') => void,
   onRelease: (id: string) => void,
+  onScanClick?: () => void,
   vehicleType: 'moto' | 'car',
   key?: string
 }) {
@@ -2239,6 +2232,17 @@ function StatusView({ spots, startTime, endTime, onViewOnMap, onRelease, vehicle
                   已佔用
                 </span>
               </div>
+            )}
+
+            {onScanClick && (
+              <Button
+                variant="secondary"
+                className="py-4 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 flex items-center justify-center gap-2 text-xs font-black shadow-xs active:scale-95 transition-all"
+                onClick={onScanClick}
+              >
+                <Camera size={18} className="text-emerald-600 animate-pulse" />
+                <span>📷 二維碼 (QR Code) 掃碼離場</span>
+              </Button>
             )}
 
             <Button
