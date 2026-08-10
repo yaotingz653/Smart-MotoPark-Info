@@ -136,6 +136,11 @@ export default function App() {
       setEntryNotice(prev => {
         if (!prev || prev.status !== 'pending') return prev;
         if (prev.remainingSeconds <= 1) {
+          openModal({
+            type: 'alert',
+            title: '門口進場未登記警示',
+            message: `提醒：您的車牌【${prev.plateNumber}】已進場超過 5 分鐘未完成二維碼 (QR Code) 掃碼登記，系統已自動發送違規通報至校園管理者控制台。`
+          });
           return { ...prev, remainingSeconds: 0, status: 'expired' };
         }
         return { ...prev, remainingSeconds: prev.remainingSeconds - 1 };
@@ -143,7 +148,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [entryNotice?.status]);
+  }, [entryNotice?.status, openModal]);
  
   const handleScanSuccess = async (spotId: string, qrcodeData: string = "MOTO_PARK_MOCK_DATA") => {
     setIsScanning(false);
@@ -624,9 +629,10 @@ export default function App() {
                 spotsError={spotsError}
                 onRetrySpots={() => { setSpotsError(null); fetchSpots(); }}
                 onTriggerEntryNotice={() => {
+                  const currentPlate = user?.plate_number || (vehicleType === 'car' ? 'CAR-8888' : 'MOTO-8888');
                   setEntryNotice({
                     id: Date.now().toString(),
-                    plateNumber: user?.plate_number || 'ABC-1234',
+                    plateNumber: currentPlate,
                     entryTime: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
                     remainingSeconds: 300,
                     status: 'pending'
