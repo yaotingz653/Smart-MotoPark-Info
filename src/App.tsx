@@ -2710,47 +2710,40 @@ function QRCodeScanner({ isOpen, onClose, onScanSuccess, spots, vehicleType }: {
             )}
           </div>
         ) : (
-          /* 無鏡頭時的電腦測試 Fallback UI */
-          <div className="w-full max-w-sm bg-white/5 border border-white/10 rounded-[30px] p-6 flex flex-col items-center gap-4 text-center">
-            <div className="w-16 h-16 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-400 mb-2">
-              <Camera size={32} />
+          /* 無鏡頭/測試時的極簡測試卡片 */
+          <div className="w-full max-w-sm bg-slate-900/90 border border-slate-800 rounded-[35px] p-6 flex flex-col items-center gap-4 text-center shadow-2xl backdrop-blur-xl">
+            <div className="w-14 h-14 rounded-2xl bg-amber-400/10 flex items-center justify-center text-amber-400 mb-1 border border-amber-400/20">
+              <Camera size={26} />
             </div>
             
             <div className="space-y-1">
-              <h4 className="text-white text-sm font-bold">電腦測試模擬模式已啟用</h4>
-              <p className="text-slate-400 text-xs leading-relaxed">
-                系統偵測到此電腦無相機鏡頭，您可以直接選擇一個可用的空車位，並按下模擬按鈕以跳過實體掃碼動作。
+              <h4 className="text-white text-sm font-black tracking-wide">二維碼測試模擬模式已啟用</h4>
+              <p className="text-slate-400 text-xs leading-relaxed font-medium">
+                點擊下方任一車位膠囊，即可一鍵模擬二維碼 (QR Code) 條碼解析：
               </p>
             </div>
 
             {availableSpots.length > 0 ? (
-              <div className="w-full space-y-3 mt-2">
-                <select
-                  value={manualSpotId}
-                  onChange={(e) => setManualSpotId(e.target.value)}
-                  className="w-full bg-slate-800 text-white border border-slate-700 text-xs rounded-xl px-4 py-3 focus:outline-none focus:ring-1 focus:ring-emerald-400"
-                >
-                  <option value="">-- 請選擇一個模擬掃碼的車位 --</option>
-                  {availableSpots.map(s => (
-                    <option key={s.id} value={s.id}>車位 {s.number}</option>
-                  ))}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => handleMockScan(manualSpotId)}
-                  disabled={!manualSpotId || successSpot !== null}
-                  className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-700 text-slate-900 font-bold rounded-xl text-xs uppercase tracking-wider transition-colors"
-                >
-                  {successSpot ? "驗證中..." : "模擬相機對焦並掃描"}
-                </button>
+              <div className="flex flex-wrap gap-2 justify-center my-2 max-h-48 overflow-y-auto p-1 scrollbar-hide">
+                {availableSpots.slice(0, 8).map(spot => (
+                  <button
+                    key={`demo-qr-${spot.id}`}
+                    type="button"
+                    onClick={() => handleMockScan(spot.id)}
+                    disabled={successSpot !== null}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-emerald-400 border border-emerald-500/30 rounded-2xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 shadow-sm"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    車位 {spot.number}
+                  </button>
+                ))}
               </div>
             ) : (
-              <p className="text-red-400 text-xs">目前無空車位，無法進行模擬。</p>
+              <p className="text-rose-400 text-xs font-bold">目前無空車位，無法進行模擬。</p>
             )}
 
             {successSpot && (
-              <div className="text-emerald-400 text-xs font-bold flex items-center gap-1.5 mt-2 animate-pulse">
+              <div className="text-emerald-400 text-xs font-bold flex items-center gap-1.5 mt-1 animate-pulse">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                 已成功模擬掃描車位 {successSpot.number}，正在解鎖中...
               </div>

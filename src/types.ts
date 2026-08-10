@@ -40,3 +40,12 @@ export interface CommunityMessage {
   content: string;
   created_at: string;
 }
+
+export interface EntryNotice {
+  id: string;
+  plateNumber: string;
+  entryTime: string;
+  remainingSeconds: number; // 預設 300 秒 (5 分鐘)
+  status: 'pending' | 'completed' | 'expired';
+}
+
