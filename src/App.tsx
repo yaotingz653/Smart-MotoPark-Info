@@ -153,15 +153,61 @@ export default function App() {
   const handleScanSuccess = async (spotId: string, qrcodeData: string = "MOTO_PARK_MOCK_DATA") => {
     setIsScanning(false);
     
-    // 雙重防線：防範掃描期間車位狀態改變或競態條件
+    // 🎯 智慧離場與預約雙重判斷：若再次掃描目前已停放的車位，自動觸發離場閉環！
     const occupiedSpot = spots.find(s => s.status === 'mine');
     if (occupiedSpot) {
-      openModal({
-        type: 'alert',
-        title: '預約失敗',
-        message: `您目前已停在車位 ${occupiedSpot.number}，請先釋放後再預約新車位。`
-      });
-      return;
+      if (occupiedSpot.id === spotId) {
+        // 再次掃描同一個已停放車位 → 自動完成離場與結算！
+        try {
+          console.log(`[QR Code 離場] 再次掃描已停放車位 ${occupiedSpot.number}，自動觸發離場與結算...`);
+          await api.releaseSpot(spotId);
+          
+          setSpots(prev => prev.map(s => s.id === spotId ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          setStartTime(null);
+          fetchSpots();
+          fetchHistory();
+          
+          openModal({
+            type: 'alert',
+            title: '離場成功通知',
+            message: `🎉 已透過二維碼 (QR Code) 成功完成車位 ${occupiedSpot.number} 離場與結算！感謝您的使用，祝您一路平安！`
+          });
+          setView('map');
+          return;
+        } catch (err: any) {
+          console.warn('[QR Code 離場] 後端 API 離場失敗，切換 Supabase 直連離場:', err);
+          try {
+            const targetTable = spotId.startsWith('CAR-') ? 'car_parking_spots' : 'parking_spots';
+            await api.supabase
+              .from(targetTable)
+              .update({ status: 'available', occupied_by: null, occupied_at: null })
+              .eq('id', spotId);
+
+            setSpots(prev => prev.map(s => s.id === spotId ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            setStartTime(null);
+            fetchSpots();
+            fetchHistory();
+
+            openModal({
+              type: 'alert',
+              title: '離場成功通知',
+              message: `🎉 已透過二維碼 (QR Code) 成功完成車位 ${occupiedSpot.number} 離場與結算！`
+            });
+            setView('map');
+            return;
+          } catch (fallbackReleaseErr) {
+            console.error('[QR Code 離場] 直連離場也失敗:', fallbackReleaseErr);
+          }
+        }
+      } else {
+        // 掃描的是其他車位 → 提示先釋放原車位
+        openModal({
+          type: 'alert',
+          title: '您已有停放中的車位',
+          message: `您目前已在車位 ${occupiedSpot.number} 停放中。若要離場，請再次掃描車位 ${occupiedSpot.number} 的 QR Code 即可自動完成離場！`
+        });
+        return;
+      }
     }
 
     const spot = spots.find(s => s.id === spotId);
