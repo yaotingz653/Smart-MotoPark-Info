@@ -25,7 +25,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ViewState, VehicleMode, ParkingSpot, UserProfile, ParkingBlock, CommunityMessage } from './types';
+import { ViewState, VehicleMode, ParkingSpot, UserProfile, ParkingBlock, CommunityMessage, EntryNotice } from './types';
 import { askParkingAI } from './lib/gemini';
 import * as api from './lib/api';
 import GoogleMapContainer, { CAMPUS_DESTINATIONS, CAMPUS_PARKING_LOTS, CAMPUS_PARKING_LOT_RELATIONS } from './components/GoogleMapContainer';
@@ -115,6 +115,35 @@ export default function App() {
   }, []);
 
   const [isScanning, setIsScanning] = useState(false);
+  const [entryNotice, setEntryNotice] = useState<EntryNotice | null>(null);
+
+  // 停車成功時自動完成進場登記 (P1)
+  const markEntryNoticeCompleted = useCallback(() => {
+    setEntryNotice(prev => {
+      if (prev && prev.status === 'pending') {
+        setTimeout(() => setEntryNotice(null), 3000);
+        return { ...prev, status: 'completed' };
+      }
+      return prev;
+    });
+  }, []);
+
+  // P1 車牌進場 5 分鐘計時器
+  useEffect(() => {
+    if (!entryNotice || entryNotice.status !== 'pending') return;
+
+    const timer = setInterval(() => {
+      setEntryNotice(prev => {
+        if (!prev || prev.status !== 'pending') return prev;
+        if (prev.remainingSeconds <= 1) {
+          return { ...prev, remainingSeconds: 0, status: 'expired' };
+        }
+        return { ...prev, remainingSeconds: prev.remainingSeconds - 1 };
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [entryNotice?.status]);
  
   const handleScanSuccess = async (spotId: string, qrcodeData: string = "MOTO_PARK_MOCK_DATA") => {
     setIsScanning(false);
@@ -148,6 +177,7 @@ export default function App() {
       setSpots(prev => prev.map(s => s.id === spotId ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
 
       setStartTime(now);
+      markEntryNoticeCompleted();
       fetchSpots();
       fetchHistory();
       setView('status');
@@ -484,6 +514,66 @@ export default function App() {
     <div className="min-h-screen bg-[#E5E5E5] text-editorial-ink font-sans overflow-hidden flex flex-col items-center justify-center p-0 m-0">
       <div className="w-full max-w-md h-[844px] bg-editorial-bg shadow-[0_40px_100px_rgba(0,0,0,0.1)] relative flex flex-col overflow-hidden rounded-none border border-slate-200">
 
+        {/* P1: 門口車牌進場 5 分鐘未掃碼倒數卡片 */}
+        <AnimatePresence>
+          {entryNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: -50, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -30, scale: 0.9 }}
+              className="absolute top-4 left-4 right-4 z-50 pointer-events-auto"
+            >
+              <div className={`p-4 rounded-3xl shadow-2xl backdrop-blur-xl border flex items-center justify-between text-left transition-all ${
+                entryNotice.status === 'completed'
+                  ? 'bg-emerald-900/90 border-emerald-500/50 text-emerald-100'
+                  : entryNotice.status === 'expired'
+                  ? 'bg-rose-950/90 border-rose-500/50 text-rose-100'
+                  : 'bg-slate-900/90 border-slate-700/80 text-white'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-lg shrink-0 ${
+                    entryNotice.status === 'completed'
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : entryNotice.status === 'expired'
+                      ? 'bg-rose-500/20 text-rose-400 animate-pulse'
+                      : 'bg-amber-400/20 text-amber-400'
+                  }`}>
+                    {entryNotice.status === 'completed' ? '✓' : entryNotice.status === 'expired' ? '⚠️' : '🚘'}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black uppercase tracking-wider">{entryNotice.plateNumber}</span>
+                      <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded-full font-mono">{entryNotice.entryTime} 進場</span>
+                    </div>
+                    <p className="text-[11px] opacity-80 mt-0.5 font-medium">
+                      {entryNotice.status === 'completed'
+                        ? '已成功完成二維碼 (QR Code) 車位登記！'
+                        : entryNotice.status === 'expired'
+                        ? '已超過 5 分鐘未登記，系統已自動通報管理端'
+                        : '車牌已進場，請於 5 分鐘內完成掃碼或預約車位'}
+                    </p>
+                  </div>
+                </div>
+
+                {entryNotice.status === 'pending' && (
+                  <div className="text-right shrink-0 ml-3">
+                    <span className="text-xs font-mono font-black text-amber-400 block">
+                      {Math.floor(entryNotice.remainingSeconds / 60).toString().padStart(2, '0')}:
+                      {(entryNotice.remainingSeconds % 60).toString().padStart(2, '0')}
+                    </span>
+                    <button
+                      onClick={() => setIsScanning(true)}
+                      className="text-[9px] font-black uppercase tracking-wider bg-amber-400 hover:bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full transition-all active:scale-95 mt-0.5 block ml-auto shadow-md"
+                    >
+                      掃碼停車
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <main className="flex-1 relative overflow-hidden">
           <AnimatePresence mode="wait">
             {view === 'login' && <LoginView key="login" onLogin={handleLoginSuccess} />}
@@ -531,6 +621,15 @@ export default function App() {
                 }}
                 spotsError={spotsError}
                 onRetrySpots={() => { setSpotsError(null); fetchSpots(); }}
+                onTriggerEntryNotice={() => {
+                  setEntryNotice({
+                    id: Date.now().toString(),
+                    plateNumber: user?.plate_number || 'ABC-1234',
+                    entryTime: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
+                    remainingSeconds: 300,
+                    status: 'pending'
+                  });
+                }}
               />
 
             )}
@@ -1146,7 +1245,7 @@ function LoginButton({ icon, label, variant, onClick }: any) {
 
 
 
-function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType, onOpenMap, onSwitchVehicleMode, spotsError, onRetrySpots }: {
+function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType, onOpenMap, onSwitchVehicleMode, onTriggerEntryNotice, spotsError, onRetrySpots }: {
   spots: ParkingSpot[],
   query: string,
   setQuery: (q: string) => void,
@@ -1155,6 +1254,7 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
   vehicleType: 'moto' | 'car',
   onOpenMap?: (opts: { mode: 'location' | 'navigation', carDestination: string | null, carParkingLotName: string | null, origin: { lat: number; lng: number } | 'gps' | 'entrance' }) => void,
   onSwitchVehicleMode?: () => void,
+  onTriggerEntryNotice?: () => void,
   spotsError?: string | null,
   onRetrySpots?: () => void,
   key?: string
@@ -1434,16 +1534,27 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
             </h1>
           </div>
           <div className="flex flex-col items-end gap-2">
-            {onSwitchVehicleMode && (
-              <button
-                onClick={onSwitchVehicleMode}
-                className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full text-[11px] font-bold transition-all active:scale-95 border border-slate-200/80 shadow-2xs"
-                title="切換載具模式"
-              >
-                {isCar ? <Bike size={13} className="text-[#FF4D00]" /> : <Car size={13} className="text-blue-600" />}
-                <span>{isCar ? '切換機車' : '切換汽車'}</span>
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {onTriggerEntryNotice && (
+                <button
+                  onClick={onTriggerEntryNotice}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-full text-[10px] font-black tracking-wider transition-all active:scale-95 border border-amber-300/80 shadow-2xs"
+                  title="模擬車牌感應進場 (開啟 5 分鐘未掃碼倒數)"
+                >
+                  <span>🚘 模擬進場</span>
+                </button>
+              )}
+              {onSwitchVehicleMode && (
+                <button
+                  onClick={onSwitchVehicleMode}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full text-[11px] font-bold transition-all active:scale-95 border border-slate-200/80 shadow-2xs"
+                  title="切換載具模式"
+                >
+                  {isCar ? <Bike size={13} className="text-[#FF4D00]" /> : <Car size={13} className="text-blue-600" />}
+                  <span>{isCar ? '切換機車' : '切換汽車'}</span>
+                </button>
+              )}
+            </div>
             {isCar && recommendationInfo ? (
               <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
