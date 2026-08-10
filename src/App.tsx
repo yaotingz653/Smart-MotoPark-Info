@@ -216,6 +216,7 @@ export default function App() {
 
         fetchSpots();
         setStartTime(new Date());
+        markEntryNoticeCompleted();
         fetchHistory();
         setView('status');
       } catch (fallbackErr: any) {
@@ -492,6 +493,7 @@ export default function App() {
             const res = await api.reserveSpot(id);
             setModal(prev => ({ ...prev, isOpen: false }));
             setStartTime(now);
+            markEntryNoticeCompleted();
             await fetchSpots();
             await fetchHistory();
             setView('status');
