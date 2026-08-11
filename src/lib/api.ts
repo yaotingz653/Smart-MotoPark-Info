@@ -17,64 +17,26 @@ export const API_BASE_URL = RAW_API_BASE
   ? RAW_API_BASE.replace(/\/$/, "")
   : (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
-console.log("[BUILD MARKER & ENV DIAGNOSTIC]", {
-  buildSha: import.meta.env.VITE_VERCEL_GIT_COMMIT_SHA || import.meta.env.VITE_BUILD_ID || "COMMIT-3bd5c8b",
-  mode: import.meta.env.MODE,
-  isDev: import.meta.env.DEV,
-  url: SUPABASE_URL,
-  hasAnonKey: !!SUPABASE_ANON_KEY,
-  apiBaseUrl: API_BASE_URL || "(Direct Supabase Mode)"
-});
-
 export const supabase = createClient(SUPABASE_URL || "https://dummy.supabase.co", SUPABASE_ANON_KEY || "dummy");
 
 export let useLocalSimulation = false;
 
 /**
- * 初始化社群聊天室資料表 community_messages
+ * 檢查社群聊天室連線
  */
 async function initCommunityTable() {
-  const sql = `
-    CREATE TABLE IF NOT EXISTS public.community_messages (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id text,
-      user_name text NOT NULL,
-      user_avatar text,
-      role text NOT NULL CHECK (role IN ('student', 'admin', 'ai')),
-      content text NOT NULL,
-      created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
-    );
-    
-    -- 確保關閉該表的 Row Level Security，防範預約或聊天時 PostgREST 讀寫被阻擋
-    ALTER TABLE public.community_messages DISABLE ROW LEVEL SECURITY;
-  `;
   try {
-    const { error } = await supabase.rpc('exec_sql', { sql });
-    if (error) {
-      console.warn("自動建立社群資料表警告 (RPC 執行失敗，可能是 RPC 不存在):", error);
-      // RPC 失敗代表資料庫內無 exec_sql，我們直接以簡單 SELECT 測試表是否存在
-      const { error: testError } = await supabase.from('community_messages').select('id').limit(1);
-      if (testError) {
-        console.warn("測試查詢失敗，確定資料表不存在，啟用本地模擬數據模式！", testError);
-        useLocalSimulation = true;
-      }
-    } else {
-      console.log("社群資料表檢查/建立/解鎖成功");
-      // 做一次測試讀取，確保不是空表但被 RLS 擋住
-      const { error: testError } = await supabase.from('community_messages').select('id').limit(1);
-      if (testError) {
-        console.warn("前端查詢失敗（可能是 RLS 政策阻擋或 schema 未更新），啟用本地模擬數據模式！", testError);
-        useLocalSimulation = true;
-      }
+    const { error: testError } = await supabase.from('community_messages').select('id').limit(1);
+    if (testError) {
+      useLocalSimulation = true;
     }
   } catch (e) {
-    console.error("初始化社群資料表失敗，啟用本地模擬數據模式:", e);
     useLocalSimulation = true;
   }
 }
 
-// 自動執行建表初始化
-initCommunityTable().catch(console.error);
+// 自動執行初始化
+initCommunityTable().catch(() => {});
 
 
 // NOTE: Token 儲存在 localStorage，生產環境建議改用 HttpOnly Cookie
