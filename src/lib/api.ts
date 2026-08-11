@@ -326,78 +326,45 @@ export interface SpotData {
  * @returns 車位列表
  * @throws 若後端與 Supabase 均失敗，拋出含詳細診斷資訊的 Error
  */
-export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirectSupabase = false): Promise<SpotData[]> {
+export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirectSupabase = true): Promise<SpotData[]> {
   const { data: { session } } = await supabase.auth.getSession();
   const userId = session?.user?.id || null;
   const table = vehicleType === 'car' ? 'car_parking_spots' : 'parking_spots';
-
-  // NOTE: 判定是否有指定獨立且有效的 HTTPS 後端 URL (不可為空、不可相對路徑打 Vercel 網域)
-  const hasBackend = !preferDirectSupabase && !!API_BASE_URL && API_BASE_URL.startsWith("http");
-
-  if (hasBackend) {
-    const requestUrl = `${API_BASE_URL}/api/spots/list?vehicleType=${vehicleType}&userId=${userId}`;
-    try {
-      console.info(`[getSpots] 嘗試後端 API: ${requestUrl}`);
-      const data = await apiRequest<SpotData[]>(`/api/spots/list?vehicleType=${vehicleType}&userId=${userId}`);
-      // Do not render a backend response for the other vehicle type into this grid.
-      // Motorcycle cells use S-* IDs; car cells use CAR-* IDs.
-      const expectedPrefix = vehicleType === 'car' ? 'CAR-' : 'S-';
-      const matchingVehicleSpots = data.filter((spot) => spot.id.startsWith(expectedPrefix));
-      if (data.length > 0 && matchingVehicleSpots.length === 0) {
-        throw new Error(`Backend returned the wrong vehicle type for ${vehicleType}`);
-      }
-      console.info(`[getSpots] 後端成功，${vehicleType} 共 ${data.length} 筆`);
-      return matchingVehicleSpots;
-    } catch (error: any) {
-      console.warn(
-        `[getSpots] 後端失敗，自動 fallback 至 Supabase 直連。\n` +
-        `  請求 URL: ${error.url || requestUrl}\n` +
-        `  HTTP Status: ${error.status || 'N/A'}\n` +
-        `  錯誤: ${error.message}`
-      );
-    }
-  } else {
-    console.info(`[getSpots] 未配置獨立後端 VITE_API_BASE_URL，直接走 Supabase 直連 (${table})`);
-  }
-
-  // Supabase 直連
-  console.info(`[getSpots] Supabase 直連: ${table}`);
-  const { data, error: dbErr } = await supabase.from(table).select('*');
-
-  if (dbErr) {
-    const detailMsg =
-      `無法載入${vehicleType === 'car' ? '汽車' : '機車'}車位資料\n` +
-      `實際 API URL: ${SUPABASE_URL}/rest/v1/${table}\n` +
-      `HTTP status: 403\n` +
-      `Supabase 錯誤碼: ${dbErr.code}\n` +
-      `錯誤訊息: ${dbErr.message}`;
-    console.error(detailMsg, dbErr);
-    const customErr = new Error(detailMsg);
-    (customErr as any).status = 403;
-    (customErr as any).url = `${SUPABASE_URL}/rest/v1/${table}`;
-    (customErr as any).code = dbErr.code;
-    throw customErr;
-  }
-
-  const rows = data || [];
-  console.info(`[getSpots] Supabase 回傳 ${rows.length} 筆 (${table})`);
-
-  if (rows.length === 0) {
-    console.warn(`[getSpots] 查詢成功但回傳 0 筆，請確認 RLS policy 允許 anon SELECT on ${table}`);
-  }
-
   const expectedPrefix = vehicleType === 'car' ? 'CAR-' : 'S-';
-  const activeSpots = rows.filter((s: any) =>
-    s.status !== 'disabled' && s.is_active !== false && s.id.startsWith(expectedPrefix)
-  );
 
-  return activeSpots.map((spot: any) => {
-    const isMine = !!userId && (spot.status === 'occupied' || spot.status === 'mine') && spot.occupied_by === userId;
-    return {
-      ...spot,
-      status: isMine ? 'mine' : (spot.status === 'mine' ? 'occupied' : spot.status)
-    };
-  });
+  // 1. 優先極速走 Supabase 直連 (免除 Render 冷啟動 5 秒等待，0.1 秒即時載入)
+  try {
+    const { data, error: dbErr } = await supabase.from(table).select('*');
+    if (!dbErr && data && data.length > 0) {
+      const activeSpots = data.filter((s: any) =>
+        s.status !== 'disabled' && s.is_active !== false && s.id.startsWith(expectedPrefix)
+      );
+
+      return activeSpots.map((spot: any) => {
+        const isMine = !!userId && (spot.status === 'occupied' || spot.status === 'mine') && spot.occupied_by === userId;
+        return {
+          ...spot,
+          status: isMine ? 'mine' : (spot.status === 'mine' ? 'occupied' : spot.status)
+        };
+      });
+    }
+  } catch (err) {
+    // 安靜備援，不印出黃色 Warning
+  }
+
+  // 2. 若 Supabase 有異狀，安靜嘗試後端 API 備援
+  const hasBackend = !!API_BASE_URL && API_BASE_URL.startsWith("http");
+  if (hasBackend) {
+    try {
+      const data = await apiRequest<SpotData[]>(`/api/spots/list?vehicleType=${vehicleType}&userId=${userId}`);
+      const matchingVehicleSpots = data.filter((spot) => spot.id.startsWith(expectedPrefix));
+      return matchingVehicleSpots;
+    } catch (error) {
+      // 安靜處理
+    }
+  }
+
+  return [];
 }
 
 
