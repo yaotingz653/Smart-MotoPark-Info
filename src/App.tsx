@@ -425,10 +425,6 @@ export default function App() {
       
       setView('vehicle-select');
       fetchHistory();
-
-      // 3. 需求 5：登入成功時在 Console 印出資訊
-      const [motos, cars] = await Promise.all([api.getSpots('moto'), api.getSpots('car')]);
-      console.log(`[LOGIN SUCCESS DIAGNOSTIC]\n  authenticated user id: ${data.id}\n  moto spots count: ${motos.length}\n  car spots count: ${cars.length}`);
     } catch (err: any) {
       console.error('[handleLoginSuccess Failed]:', err);
       openModal({

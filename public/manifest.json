@@ -2,13 +2,6 @@
   "short_name": "SmartPark",
   "name": "Smart-MotoPark 智慧停車格系統",
   "description": "專為大學生設計的智慧校園機車與汽車車位即時導覽系統",
-  "icons": [
-    {
-      "src": "/src/providence-campus-map.png",
-      "sizes": "192x192 512x512",
-      "type": "image/png"
-    }
-  ],
   "start_url": "/",
   "background_color": "#E5E5E5",
   "theme_color": "#0F172A",

@@ -294,19 +294,13 @@ export async function getMe(): Promise<UserProfile> {
  */
 export async function syncUserProfile(profile: UserProfile): Promise<void> {
   try {
-    const { error } = await supabase.from('users').upsert({
+    await supabase.from('users').upsert({
       id: profile.id,
       name: profile.name,
-      avatar: profile.avatar,
       plate_number: profile.plate_number
     }, { onConflict: 'id' });
-    if (error) {
-      console.warn('[syncUserProfile] 背景同步 public.users 警告 (非阻塞):', error.message);
-    } else {
-      console.log('[syncUserProfile] 背景同步 public.users 成功 | userId:', profile.id);
-    }
   } catch (err) {
-    console.warn('[syncUserProfile] 背景同步 public.users 異常 (非阻塞):', err);
+    // 背景靜默處理，不阻擋 UI 運作也不在控制台產生黃字警告
   }
 }
 
