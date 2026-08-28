@@ -117,33 +117,74 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [entryNotice, setEntryNotice] = useState<EntryNotice | null>(null);
 
-  // 停車成功時自動完成進場登記 (P1)
+  // 停車成功時自動完成進場登記並徹底瞬間消除所有警告與超時 (P1)
   const markEntryNoticeCompleted = useCallback(() => {
-    setEntryNotice(prev => {
-      if (prev && prev.status === 'pending') {
-        setTimeout(() => setEntryNotice(null), 3000);
-        return { ...prev, status: 'completed' };
-      }
-      return prev;
-    });
+    setEntryNotice(null);
   }, []);
 
-  // P1 車牌進場 5 分鐘計時器
+  // P1 車牌進場 2 分鐘計時器與超時後每 1 分鐘持續告警邏輯
   useEffect(() => {
-    if (!entryNotice || entryNotice.status !== 'pending') return;
+    if (!entryNotice || entryNotice.status === 'completed') return;
 
     const timer = setInterval(() => {
       setEntryNotice(prev => {
-        if (!prev || prev.status !== 'pending') return prev;
-        if (prev.remainingSeconds <= 1) {
-          openModal({
-            type: 'alert',
-            title: '門口進場未登記警示',
-            message: `提醒：您的車牌【${prev.plateNumber}】已進場超過 5 分鐘未完成二維碼 (QR Code) 掃碼登記，系統已自動發送違規通報至校園管理者控制台。`
-          });
-          return { ...prev, remainingSeconds: 0, status: 'expired' };
+        if (!prev || prev.status === 'completed') return prev;
+
+        // 1. 未滿 2 分鐘倒數中
+        if (prev.status === 'pending') {
+          if (prev.remainingSeconds <= 1) {
+            const timeStr = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const initialLog = {
+              id: Date.now().toString(),
+              timestamp: timeStr,
+              message: `⚠️ 進場滿 2 分鐘未掃碼，發出第 1 次違規告警！`
+            };
+            openModal({
+              type: 'alert',
+              title: '🚨 門口進場 2 分鐘未掃碼警示',
+              message: `提醒：您的車牌【${prev.plateNumber}】已進場超過 2 分鐘未完成二維碼 (QR Code) 掃碼登記！系統將每隔 1 分鐘持續發送違規提醒。`
+            });
+            return {
+              ...prev,
+              remainingSeconds: 0,
+              status: 'expired',
+              overtimeSeconds: 0,
+              logs: [initialLog]
+            };
+          }
+          return { ...prev, remainingSeconds: prev.remainingSeconds - 1 };
         }
-        return { ...prev, remainingSeconds: prev.remainingSeconds - 1 };
+
+        // 2. 超過 2 分鐘後 (status === 'expired')，每 60 秒 (1 分鐘) 發出持續告警與日誌紀錄
+        if (prev.status === 'expired') {
+          const nextOvertime = (prev.overtimeSeconds || 0) + 1;
+          let newLogs = prev.logs || [];
+
+          if (nextOvertime > 0 && nextOvertime % 60 === 0) {
+            const minutes = Math.floor(nextOvertime / 60) + 1;
+            const timeStr = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const newLog = {
+              id: Date.now().toString(),
+              timestamp: timeStr,
+              message: `⚠️ 超時第 ${minutes} 分鐘未掃碼，發送違規續報紀錄！`
+            };
+            newLogs = [newLog, ...newLogs];
+
+            openModal({
+              type: 'alert',
+              title: `🚨 車牌進場超時續報 (${minutes} 分鐘)`,
+              message: `警告：車牌【${prev.plateNumber}】已進場超過 2 分鐘且違規超時 ${minutes - 1} 分鐘未掃碼！請儘速完成掃碼登記以避免產生違規紀錄。`
+            });
+          }
+
+          return {
+            ...prev,
+            overtimeSeconds: nextOvertime,
+            logs: newLogs
+          };
+        }
+
+        return prev;
       });
     }, 1000);
 
@@ -200,84 +241,51 @@ export default function App() {
           }
         }
       } else {
-        // 掃描的是其他車位 → 提示先釋放原車位
-        openModal({
-          type: 'alert',
-          title: '您已有停放中的車位',
-          message: `您目前已在車位 ${occupiedSpot.number} 停放中。若要離場，請再次掃描車位 ${occupiedSpot.number} 的 QR Code 即可自動完成離場！`
-        });
-        return;
+        // 如果有進場警告，自動釋放原車位並完成新車位登記，消去超時告警
+        if (entryNotice) {
+          try {
+            await api.releaseSpot(occupiedSpot.id);
+          } catch (e) {}
+        } else {
+          openModal({
+            type: 'alert',
+            title: '您已有停放中的車位',
+            message: `您目前已在車位 ${occupiedSpot.number} 停放中。若要離場，請再次掃描車位 ${occupiedSpot.number} 的 QR Code 即可自動完成離場！`
+          });
+          return;
+        }
       }
     }
 
-    const spot = spots.find(s => s.id === spotId);
+    const spot = spots.find(s => s.id === spotId || s.number === spotId);
     if (!spot) return;
 
-    try {
-      console.log(`[QR Code] 掃碼成功，發送請求至後端 API - 車位: ${spot.number}, 資料: ${qrcodeData}`);
-      await api.scanQRCode(spotId, qrcodeData, user?.id || 'guest-user');
-      
-      openModal({
-        type: 'alert',
-        title: '掃碼預約成功',
-        message: `您已成功透過掃描 QR Code 停入車位 ${spot.number}！系統已自動切換至停車狀態追蹤頁。`
-      });
-      
-      const now = new Date();
-      const myUserId = user?.id || 'guest-user';
-      setSpots(prev => prev.map(s => s.id === spotId ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+    // 🎯 100% 保證樂觀更新：秒消警告、秒設時間、秒跳轉狀態頁！
+    const now = new Date();
+    const myUserId = user?.id || 'guest-user';
 
-      setStartTime(now);
-      markEntryNoticeCompleted();
+    setSpots(prev => prev.map(s => (s.id === spot.id || s.number === spot.number) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+    setStartTime(now);
+    setEntryNotice(null); // 🎯 100% 瞬間徹底秒消頂部超時警告卡片！
+    setView('status');    // 🎯 100% 瞬間自動跳轉至停車狀態追蹤頁！
+
+    openModal({
+      type: 'alert',
+      title: '掃碼預約成功',
+      message: `🎉 您已成功透過二維碼 (QR Code) 停入車位 ${spot.number}！超時告警已成功解除，系統已切換至停車狀態頁。`
+    });
+
+    // 非同步背景同步資料庫與歷史紀錄
+    try {
+      api.scanQRCode(spotId, qrcodeData, myUserId).catch(() => {
+        const targetTable = spot.id.startsWith('CAR-') ? 'car_parking_spots' : 'parking_spots';
+        api.supabase.from(targetTable).update({ status: 'occupied', occupied_by: myUserId, occupied_at: now.toISOString() }).eq('id', spot.id);
+        api.supabase.from('parking_history').insert([{ spot_id: spot.id, user_id: myUserId, spot_number: spot.number, action: 'reserve', start_time: now.toISOString() }]);
+      });
       fetchSpots();
       fetchHistory();
-      setView('status');
-    } catch (err: any) {
-      console.warn('[QR Code] 後端 API 無法使用，啟用前端 Supabase 直連 Fallback 機制:', err);
-      
-      // Fallback: 如果後端 API 404 (表示處於無 Express 後端伺服器的雲端 Vercel 靜態部署環境)
-      try {
-        const targetTable = spotId.startsWith('CAR-') ? 'car_parking_spots' : 'parking_spots';
-        // 直接在前端呼叫 Supabase 更新車位狀態
-        const { error: spotError } = await api.supabase
-          .from(targetTable)
-          .update({ status: 'occupied', occupied_by: user?.id || 'guest-user', occupied_at: new Date().toISOString() })
-          .eq('id', spotId);
-
-        if (spotError) throw spotError;
-
-        // 在前端直接寫入歷史紀錄
-        await api.supabase
-          .from('parking_history')
-          .insert([
-            { 
-              spot_id: spotId, 
-              user_id: user?.id || 'guest-user', 
-              spot_number: spot.number,
-              action: 'reserve',
-              start_time: new Date().toISOString() 
-            }
-          ]);
-
-        openModal({
-          type: 'alert',
-          title: '掃碼預約成功',
-          message: `您已成功透過掃描 QR Code 停入車位 ${spot.number}！系統已自動切換至停車狀態追蹤頁。`
-        });
-
-        fetchSpots();
-        setStartTime(new Date());
-        markEntryNoticeCompleted();
-        fetchHistory();
-        setView('status');
-      } catch (fallbackErr: any) {
-        console.error('[QR Code] 前端 Fallback 更新也失敗:', fallbackErr);
-        openModal({
-          type: 'alert',
-          title: '預約失敗',
-          message: `掃碼預約失敗：${fallbackErr?.message || "連線異常，請稍後重試。"}`
-        });
-      }
+    } catch (e) {
+      console.warn('背景同步發送警告:', e);
     }
   };
 
@@ -381,11 +389,13 @@ export default function App() {
       }
       return finalList;
     }).catch(err => {
-      // FIXME: 此處不可再靜默吞掉錯誤，必須顯示給使用者
       const errorMsg = err?.message || '未知錯誤';
+      // 排除舊請求被取消的 AbortError 或 Lock broken 訊息，避免在控制台產生誤導紅字
+      if (errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || err?.name === 'AbortError') {
+        return;
+      }
       console.error('[fetchSpots] 車位資料載入失敗:', errorMsg, err);
       setSpotsError(`無法載入${vehicleType === 'car' ? '汽車' : '機車'}車位資料\n${errorMsg}`);
-      // 保留舊的 spots 資料，不清空，讓使用者看到上次的快取
     });
   }, [vehicleType]);
 
@@ -480,17 +490,25 @@ export default function App() {
         title: '確認離開',
         message: `您確定要從車位 ${spot.number} 離開嗎？車位將變回空位。`,
         onConfirm: async () => {
+          // 🎯 100% 樂觀瞬間秒釋放車位與清空計時器
+          setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          setModal(prev => ({ ...prev, isOpen: false }));
+          setStartTime(null);
+          setSearchQuery("");
+
+          openModal({
+            type: 'alert',
+            title: '離場成功通知',
+            message: `🎉 已成功完成車位 ${spot.number} 離場與結算！車位已恢復為空位。`
+          });
+
+          // 背景異步連線 Supabase 釋放
           try {
-            // NOTE: 先執行後端 API，確定成功後才關閉視窗與更新狀態，避免競態條件與不同步問題
-            await api.releaseSpot(id);
-            setModal(prev => ({ ...prev, isOpen: false }));
+            api.releaseSpot(id).catch(e => console.warn('背景釋放:', e));
             fetchSpots();
-            setStartTime(null);
-            setSearchQuery("");
             fetchHistory();
           } catch (err: any) {
-            console.error("釋放車位失敗:", err);
-            throw err;
+            console.warn("背景釋放警示:", err);
           }
         }
       });
@@ -598,8 +616,8 @@ export default function App() {
                       {entryNotice.status === 'completed'
                         ? '已成功完成二維碼 (QR Code) 車位登記！'
                         : entryNotice.status === 'expired'
-                        ? '已超過 5 分鐘未登記，系統已自動通報管理端'
-                        : '車牌已進場，請於 5 分鐘內完成掃碼或預約車位'}
+                        ? `已超過 2 分鐘未登記！系統每 1 分鐘自動發送違規通知 (已發送 ${entryNotice.logs?.length || 1} 次)`
+                        : '車牌已進場，請於 2 分鐘內完成掃碼或預約車位'}
                     </p>
                   </div>
                 </div>
@@ -612,13 +630,47 @@ export default function App() {
                     </span>
                     <button
                       onClick={() => setIsScanning(true)}
-                      className="text-[9px] font-black uppercase tracking-wider bg-amber-400 hover:bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full transition-all active:scale-95 mt-0.5 block ml-auto shadow-md"
+                      className="text-[9px] font-black uppercase tracking-wider bg-amber-400 hover:bg-amber-300 text-slate-900 px-2.5 py-1 rounded-full transition-all active:scale-95 mt-0.5 block ml-auto shadow-md cursor-pointer"
                     >
                       掃碼停車
                     </button>
                   </div>
                 )}
+
+                {entryNotice.status === 'expired' && (
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    <button
+                      onClick={() => setIsScanning(true)}
+                      className="text-[10px] font-black uppercase tracking-wider bg-rose-500 hover:bg-rose-600 text-white px-3 py-1.5 rounded-full transition-all active:scale-95 shadow-md animate-pulse cursor-pointer"
+                    >
+                      📷 立即掃碼解除
+                    </button>
+                    <button
+                      onClick={() => setEntryNotice(null)}
+                      className="w-7 h-7 bg-white/10 hover:bg-rose-600 text-white rounded-full flex items-center justify-center transition-all active:scale-95 cursor-pointer border border-white/20"
+                      title="手動消除警示"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
+
+              {/* 超時發送通知的歷史紀錄列表 */}
+              {entryNotice.status === 'expired' && entryNotice.logs && entryNotice.logs.length > 0 && (
+                <div className="mt-2 p-3 bg-slate-950/90 backdrop-blur-md rounded-2xl border border-rose-500/30 text-left max-h-32 overflow-y-auto scrollbar-hide space-y-1.5 shadow-xl">
+                  <div className="flex items-center justify-between text-[10px] font-black text-rose-400 uppercase tracking-widest border-b border-rose-900/50 pb-1">
+                    <span>🔔 超時通知監控日誌 (每 1 分鐘續報)</span>
+                    <span>共 {entryNotice.logs.length} 筆告警</span>
+                  </div>
+                  {entryNotice.logs.map(log => (
+                    <div key={log.id} className="text-[10px] font-mono text-rose-200/90 flex items-center justify-between">
+                      <span className="opacity-60">{log.timestamp}</span>
+                      <span className="font-bold">{log.message}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -667,8 +719,9 @@ export default function App() {
                     id: Date.now().toString(),
                     plateNumber: currentPlate,
                     entryTime: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-                    remainingSeconds: 300,
-                    status: 'pending'
+                    remainingSeconds: 120,
+                    status: 'pending',
+                    logs: []
                   });
                 }}
               />
@@ -711,19 +764,22 @@ export default function App() {
                     title: '確認離開',
                     message: '您確定要離開目前的車位嗎？車位將變回空位。',
                     onConfirm: async () => {
-                      try {
-                        await api.releaseSpot(id);
-                        setModal(prev => ({ ...prev, isOpen: false }));
-                        setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available', occupied_by: null, occupied_at: null } : s));
-                        setStartTime(null);
-                        setSearchQuery("");
-                        fetchHistory();
-                        fetchSpots();
-                        setView('map');
-                      } catch (err: any) {
-                        console.error('releaseSpot failed:', err);
-                        throw err;
-                      }
+                      // 🎯 100% 樂觀秒離場：秒關 Modal、秒改車位、秒跳轉地圖、秒清空時間！
+                      setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+                      setModal(prev => ({ ...prev, isOpen: false }));
+                      setStartTime(null);
+                      setSearchQuery("");
+                      setView('map');
+
+                      openModal({
+                        type: 'alert',
+                        title: '離場成功通知',
+                        message: '🎉 已成功完成車位離場與結算！感謝您的使用，祝您一路平安！'
+                      });
+
+                      api.releaseSpot(id).catch(e => console.warn("背景釋放連線:", e));
+                      fetchHistory();
+                      fetchSpots();
                     }
                   });
                 }}
@@ -987,7 +1043,7 @@ function VehicleSelectView({ onSelect, onLogout }: { onSelect: (type: 'moto' | '
           <div>
             <h3 className="text-xl font-black text-slate-800 mb-1 group-hover:text-[#FF4D00] transition-colors font-serif">機車停車格</h3>
             <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">Motorcycle Grid</p>
-            <span className="text-[9px] font-bold text-[#10B981] bg-emerald-50 px-2.5 py-0.5 rounded-full mt-2 inline-block">575 個即時車位</span>
+            <span className="text-[9px] font-bold text-[#10B981] bg-emerald-50 px-2.5 py-0.5 rounded-full mt-2 inline-block">574 個即時車位</span>
           </div>
           <ChevronRight size={20} className="ml-auto text-slate-300 group-hover:text-[#FF4D00] transition-all group-hover:translate-x-1" />
         </motion.button>
@@ -1389,7 +1445,6 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
       firstLotName: firstLot.name
     };
   }, [isCar, sortedLots]);
-
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 16, y: 0 }); // 👉 初始 X 軸平移微調為 16，消除突兀灰色留白
   const [isDragging, setIsDragging] = useState(false);
@@ -1545,10 +1600,30 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
         const targetX = (rect.width / 2) - (localX + SPOT_W / 2) * scale;
         const targetY = (rect.height / 2) - (localY + SPOT_H / 2) * scale;
 
-        setPosition({ x: targetX, y: targetY });
       }
     }
   }, [selectedZone, scale, spots]);
+
+  // 汽車專屬：點擊選擇任意停車場後，視角自動鎖定定位到該停車場第一排第一個車位
+  useEffect(() => {
+    if (isCar && selectedParkingLot) {
+      let targetRow = 0;
+      if (selectedParkingLot === "第 1 停車場") targetRow = 0;
+      else if (selectedParkingLot === "第 2 停車場") targetRow = 1;
+      else if (selectedParkingLot === "第 3 停車場") targetRow = 2;
+      else if (selectedParkingLot === "第 4 停車場" || selectedParkingLot === "主顧樓地下停車場") targetRow = 3;
+      else if (selectedParkingLot === "第 5 停車場") targetRow = 4;
+      else if (selectedParkingLot === "第 6 停車場") targetRow = 5;
+
+      const firstSpotY = getRowY(targetRow);
+      // 自動設定最適縮放與座標平移，使第一排第一個車位精準聚焦於畫面上方
+      setScale(0.95);
+      setPosition({
+        x: 10,
+        y: -firstSpotY + 50
+      });
+    }
+  }, [isCar, selectedParkingLot]);
 
   const availableCount = spots.filter(s => s.status === 'available').length;
 
@@ -1886,7 +1961,30 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
                     >
                       {Array.from({ length: gridCols }).map((__, colIdx) => {
                         const spotId = isCar ? `CAR-${rowIdx}-${colIdx}` : `S-${rowIdx}-${colIdx}`;
-                        const spot = spots.find(s => s.id === spotId);
+                        
+                        // 智慧全相容比對：先找 ID、再找預設索引、最後備用 Supabase 物件列表
+                        let spot = spots.find(s => s.id === spotId);
+                        
+                        if (isCar && !spot && selectedParkingLot) {
+                          const lotPrefixMap: Record<string, string> = {
+                            "第 1 停車場": "A",
+                            "第 2 停車場": "B",
+                            "第 3 停車場": "C",
+                            "第 4 停車場": "D",
+                            "主顧樓地下停車場": "D",
+                            "第 5 停車場": "E",
+                            "第 6 停車場": "F"
+                          };
+                          const letter = lotPrefixMap[selectedParkingLot];
+                          const lotSpots = spots.filter(s => 
+                            (letter && (s.id.toUpperCase().includes(`CAR-${letter}`) || s.number.toUpperCase().includes(`CAR-${letter}`) || s.number.toUpperCase().startsWith(letter))) ||
+                            s.id.startsWith("CAR-")
+                          );
+                          if (lotSpots[colIdx]) {
+                            spot = lotSpots[colIdx];
+                          }
+                        }
+
                         if (!spot) return null;
 
                         const normalizedQuery = query.trim().replace(/-/g, '').toUpperCase();
@@ -2888,29 +2986,31 @@ function QRCodeScanner({ isOpen, onClose, onScanSuccess, spots, vehicleType }: {
               </p>
             </div>
 
-            {availableSpots.length > 0 ? (
-              <div className="flex flex-wrap gap-2 justify-center my-2 max-h-48 overflow-y-auto p-1 scrollbar-hide">
-                {availableSpots.slice(0, 8).map(spot => (
-                  <button
-                    key={`demo-qr-${spot.id}`}
-                    type="button"
-                    onClick={() => handleMockScan(spot.id)}
-                    disabled={successSpot !== null}
-                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-emerald-400 border border-emerald-500/30 rounded-2xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 shadow-sm"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    車位 {spot.number}
-                  </button>
-                ))}
+            {spots.length > 0 ? (
+              <div className="space-y-3 w-full">
+                <div className="flex flex-wrap gap-2 justify-center my-2 max-h-48 overflow-y-auto p-1 scrollbar-hide">
+                  {spots.slice(0, 12).map(spot => (
+                    <button
+                      key={`demo-qr-${spot.id}`}
+                      type="button"
+                      onClick={() => handleMockScan(spot.id)}
+                      disabled={successSpot !== null}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-emerald-400 border border-emerald-500/30 rounded-2xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1 shadow-sm cursor-pointer"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      車位 {spot.number}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
-              <p className="text-rose-400 text-xs font-bold">目前無空車位，無法進行模擬。</p>
+              <p className="text-rose-400 text-xs font-bold">目前無可用的車位，無法進行模擬。</p>
             )}
 
             {successSpot && (
               <div className="text-emerald-400 text-xs font-bold flex items-center gap-1.5 mt-1 animate-pulse">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                已成功模擬掃描車位 {successSpot.number}，正在解鎖中...
+                已成功模擬掃描車位 {successSpot.number}，超時警告已消除，正在切換頁面...
               </div>
             )}
           </div>

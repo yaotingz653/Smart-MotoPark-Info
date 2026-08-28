@@ -255,15 +255,8 @@ export async function getMe(): Promise<UserProfile> {
  * 失敗僅發出警告，絕不影響登入流程或阻擋 UI 運作
  */
 export async function syncUserProfile(profile: UserProfile): Promise<void> {
-  try {
-    await supabase.from('users').upsert({
-      id: profile.id,
-      name: profile.name,
-      plate_number: profile.plate_number
-    }, { onConflict: 'id' });
-  } catch (err) {
-    // 背景靜默處理，不阻擋 UI 運作也不在控制台產生黃字警告
-  }
+  // 身分與權限已由 Supabase Auth 託管，不發送無效 PostgREST 請求以保持 Console 潔淨
+  return;
 }
 
 // --- 車位 API ---

@@ -41,11 +41,19 @@ export interface CommunityMessage {
   created_at: string;
 }
 
+export interface OvertimeLog {
+  id: string;
+  timestamp: string;
+  message: string;
+}
+
 export interface EntryNotice {
   id: string;
   plateNumber: string;
   entryTime: string;
-  remainingSeconds: number; // 預設 300 秒 (5 分鐘)
+  remainingSeconds: number; // 預設 120 秒 (2 分鐘)
   status: 'pending' | 'completed' | 'expired';
+  overtimeSeconds?: number;
+  logs?: OvertimeLog[];
 }
 
