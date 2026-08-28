@@ -383,8 +383,24 @@ export default function GoogleMapContainer({
               })}
             </GoogleMap>
           ) : (
-            <div className="flex items-center justify-center w-full h-full bg-slate-100 text-slate-400 font-bold text-xs">
-              載入 Google 校園地圖中...
+            <div className="flex flex-col items-center justify-center w-full h-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-6 text-center relative overflow-hidden">
+              {/* 背景網格線條 */}
+              <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:24px_24px] opacity-30"></div>
+              
+              <div className="relative z-10 flex flex-col items-center gap-3">
+                <div className="w-16 h-16 rounded-3xl bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-400 shadow-xl shadow-blue-500/10 animate-pulse">
+                  <Compass size={32} />
+                </div>
+
+                <div>
+                  <h3 className="text-base font-black text-white tracking-wide">
+                    {isCar ? (carParkingLotName || '靜宜大學校園停車場') : `車位 ${targetSpot || ''}`}
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono mt-1">
+                    座標：24.2285° N, 120.5818° E
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
