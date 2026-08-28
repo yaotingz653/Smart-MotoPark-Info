@@ -1,11 +1,5 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { GoogleMap, useJsApiLoader, Marker, DirectionsService, DirectionsRenderer, Polyline } from '@react-google-maps/api';
+import React from 'react';
 import { X, Compass, ExternalLink } from 'lucide-react';
-
-const containerStyle = {
-  width: '100%',
-  height: '100%'
-};
 
 // 靜宜大學主顧聖母堂中心座標
 const PARKING_LOT_CENTER = {
@@ -13,10 +7,7 @@ const PARKING_LOT_CENTER = {
   lng: 120.580000
 };
 
-// 預設大門口座標 (Snapping Point)
-const ENTRANCE_COORDINATE = { lat: 24.22583219034479, lng: 120.57719225274344 };
-
-// 靜宜大學真實校園內部座標定義 (對齊 Google Maps 官方圖標)
+// 靜宜大學真實校園內部大樓座標
 export const CAMPUS_DESTINATIONS: Record<string, { lat: number, lng: number }> = {
   "任垣樓": { lat: 24.22697821929028, lng: 120.5799721902853 },
   "伯鐸樓": { lat: 24.226191754592346, lng: 120.58063468494247 },
@@ -42,6 +33,7 @@ export const CAMPUS_DESTINATIONS: Record<string, { lat: number, lng: number }> =
   "大門口": { lat: 24.22583219034479, lng: 120.57719225274344 }
 };
 
+// 靜宜大學真實校園停車場座標
 export const CAMPUS_PARKING_LOTS: Record<string, { lat: number, lng: number }> = {
   "第 1 停車場": { lat: 24.226129256098016, lng: 120.57956153623414 },
   "第 2 停車場": { lat: 24.22861666697639, lng: 120.58280168974743 },
@@ -115,96 +107,34 @@ export default function GoogleMapContainer({
 }: GoogleMapContainerProps) {
   if (!isOpen && !inline) return null;
 
-  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+  // 計算動態目標座標
+  const targetLotCoords = carParkingLotName ? (CAMPUS_PARKING_LOTS[carParkingLotName] || PARKING_LOT_CENTER) : PARKING_LOT_CENTER;
+  const destCoords = carDestination ? (CAMPUS_DESTINATIONS[carDestination] || targetLotCoords) : targetLotCoords;
+  const targetSpotCoords = targetSpot ? getParkingSpotCoordinate(targetSpot) : PARKING_LOT_CENTER;
 
-  const { isLoaded } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey: apiKey
-  });
+  const finalCoords = isCar ? destCoords : targetSpotCoords;
 
-  const [map, setMap] = useState<google.maps.Map | null>(null);
-  const [userLocation, setUserLocation] = useState<google.maps.LatLngLiteral | null>(null);
-  const [directionsResponse, setDirectionsResponse] = useState<google.maps.DirectionsResult | null>(null);
-  const hasRequestedDirections = useRef(false);
-
-  const onLoad = useCallback(function callback(map: google.maps.Map) {
-    setMap(map);
-  }, []);
-
-  const onUnmount = useCallback(function callback() {
-    setMap(null);
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    if (origin === 'gps') {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const pos = {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            };
-            setUserLocation(pos);
-            if (map && mode === 'location') {
-              map.panTo(pos);
-            }
-          },
-          () => {
-            setUserLocation(PARKING_LOT_CENTER);
-          }
-        );
-      } else {
-        setUserLocation(PARKING_LOT_CENTER);
-      }
-    } else if (typeof origin === 'object' && origin !== null) {
-      setUserLocation(origin);
-    }
-  }, [isOpen, origin, map, mode]);
-
-  const directionsCallback = useCallback((result: any, status: string) => {
-    if (status === 'OK' && result) {
-      setDirectionsResponse(result);
-    } else {
-      setDirectionsResponse({} as any);
-    }
-  }, []);
-
-  const destinationCoords = targetSpot ? getParkingSpotCoordinate(targetSpot) : PARKING_LOT_CENTER;
-  const carDestinationCoords = carDestination ? (CAMPUS_DESTINATIONS[carDestination] || { lat: 24.2263, lng: 120.5772 }) : null;
-  const targetParkingLotCoords = carParkingLotName ? (CAMPUS_PARKING_LOTS[carParkingLotName] || PARKING_LOT_CENTER) : PARKING_LOT_CENTER;
-
-  const directionsOrigin: string | google.maps.LatLngLiteral | null = 
-    isCar && origin === 'entrance'
-      ? ENTRANCE_COORDINATE
-      : ((typeof origin === 'string' && origin !== 'gps') ? origin : userLocation);
-
-  const isOriginReady = directionsOrigin !== null;
-  const isGpsMode = origin === 'gps' || (isCar && origin === 'entrance');
-
-  const lineStartCoord = (typeof directionsOrigin === 'object' && directionsOrigin !== null)
-    ? directionsOrigin
-    : (userLocation || PARKING_LOT_CENTER);
+  // 生成不需要 API Key 且 100% 穩定的 Google 地圖嵌入 URL
+  const searchKeyword = isCar ? (carParkingLotName || carDestination || "靜宜大學") : `靜宜大學 車位 ${targetSpot || ''}`;
+  const mapEmbedUrl = `https://maps.google.com/maps?q=${finalCoords.lat},${finalCoords.lng}&hl=zh-TW&z=18&output=embed`;
 
   const openExternalGoogleMaps = () => {
-    const dest = isCar ? targetParkingLotCoords : destinationCoords;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${dest.lat},${dest.lng}&travelmode=driving`;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${finalCoords.lat},${finalCoords.lng}&travelmode=driving`;
     window.open(url, '_blank');
   };
 
   return (
-    <div className={inline ? "relative w-full h-full min-h-[300px]" : "fixed inset-0 z-[9999] flex flex-col bg-slate-900/90 backdrop-blur-md p-2 sm:p-6"}>
+    <div className={inline ? "relative w-full h-full min-h-[300px] rounded-2xl overflow-hidden shadow-inner border border-slate-100" : "fixed inset-0 z-[9999] flex flex-col bg-slate-900/90 backdrop-blur-md p-2 sm:p-6"}>
       <div className="relative w-full max-w-5xl mx-auto flex-1 flex flex-col bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-200">
         
-        {/* 頂部極致清晰標題列與強制可點擊關閉按鈕 */}
+        {/* 頂部標題與關閉按鈕 */}
         {!inline && (
           <div className="flex justify-between items-center px-6 py-4 bg-slate-900 text-white shrink-0 z-[10000]">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-ping"></span>
               <h2 className="text-sm font-black tracking-wider uppercase text-slate-100">
                 {isCar 
-                  ? (mode === 'location' ? '靜宜大學校園汽車停車場即時地圖' : `導航至 ${carParkingLotName || ''}`)
+                  ? (mode === 'location' ? '靜宜大學校園汽車停車場即時地圖' : `導航至 ${carParkingLotName || searchKeyword}`)
                   : (mode === 'location' ? '校園定位' : `導航至車位 ${targetSpot || ''}`)}
               </h2>
             </div>
@@ -218,201 +148,28 @@ export default function GoogleMapContainer({
           </div>
         )}
 
-        <div className="flex-1 relative w-full h-full min-h-[350px]">
-          {isLoaded ? (
-            <GoogleMap
-              mapContainerStyle={containerStyle}
-              center={isCar ? (carDestinationCoords || targetParkingLotCoords || { lat: 24.2263, lng: 120.5772 }) : (userLocation || destinationCoords)}
-              zoom={isCar ? 17 : 20}
-              onLoad={onLoad}
-              onUnmount={onUnmount}
-              options={{
-                disableDefaultUI: true,
-                zoomControl: true,
-                mapTypeId: isCar ? 'roadmap' : 'hybrid',
-              }}
-            >
-              {userLocation && (
-                <Marker 
-                  position={userLocation} 
-                  icon={{
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: '#3B82F6',
-                    fillOpacity: 1,
-                    strokeWeight: 2,
-                    strokeColor: '#ffffff',
-                  }}
-                />
-              )}
-              
-              {!isCar && mode === 'navigation' && isOriginReady && isGpsMode && !hasRequestedDirections.current && (
-                <DirectionsService
-                  options={{
-                    origin: directionsOrigin!,
-                    destination: isCar ? destinationCoords : ENTRANCE_COORDINATE,
-                    travelMode: window.google.maps.TravelMode.DRIVING,
-                  }}
-                  callback={(response, status) => {
-                    hasRequestedDirections.current = true;
-                    directionsCallback(response, status);
-                  }}
-                />
-              )}
+        <div className="flex-1 relative w-full h-full min-h-[320px] bg-slate-100">
+          {/* 使用不需要 API Key 且 100% 鎖定該停車場真實位址的 Google 嵌入地圖 */}
+          <iframe
+            title="Google Maps Campus Navigation"
+            width="100%"
+            height="100%"
+            style={{ border: 0, minHeight: '320px' }}
+            loading="lazy"
+            allowFullScreen
+            src={mapEmbedUrl}
+            className="w-full h-full rounded-2xl"
+          ></iframe>
 
-              {!isCar && mode === 'navigation' && directionsResponse && Object.keys(directionsResponse).length > 0 && (
-                <DirectionsRenderer
-                  options={{
-                    directions: directionsResponse,
-                    suppressMarkers: isCar,
-                    polylineOptions: {
-                      strokeColor: '#3B82F6',
-                      strokeWeight: 5,
-                    }
-                  }}
-                />
-              )}
-
-              {!isCar && mode === 'navigation' && isOriginReady && isGpsMode && directionsResponse && Object.keys(directionsResponse).length === 0 && (
-                <Polyline
-                  path={[lineStartCoord, isCar ? destinationCoords : ENTRANCE_COORDINATE]}
-                  options={{
-                    strokeColor: '#3B82F6',
-                    strokeOpacity: 0.6,
-                    strokeWeight: 5,
-                    geodesic: true,
-                  }}
-                />
-              )}
-
-              {!isCar && mode === 'navigation' && isOriginReady && (
-                <>
-                  <Polyline
-                    path={[
-                      isGpsMode ? ENTRANCE_COORDINATE : lineStartCoord,
-                      destinationCoords
-                    ]}
-                    options={{
-                      strokeColor: '#FF4D00',
-                      strokeOpacity: 0.8,
-                      strokeWeight: 4,
-                      icons: [{
-                        icon: {
-                          path: 'M 0,-1 0,1',
-                          strokeOpacity: 1,
-                          scale: 4
-                        },
-                        offset: '0',
-                        repeat: '20px'
-                      }],
-                    }}
-                  />
-                  
-                  <Marker 
-                    position={destinationCoords}
-                    label={{
-                      text: targetSpot || 'P',
-                      color: '#ffffff',
-                      fontWeight: 'bold',
-                      fontSize: '12px',
-                    }}
-                    icon={{
-                      path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-                      scale: 6,
-                      fillColor: '#EF4444',
-                      fillOpacity: 1,
-                      strokeWeight: 2,
-                      strokeColor: '#ffffff',
-                    }}
-                  />
-                </>
-              )}
-
-              {isCar && Object.entries(CAMPUS_DESTINATIONS)
-                .filter(([name]) => name !== '大門口')
-                .map(([name, coords]) => {
-                  const isSelected = name === carDestination;
-                  return (
-                    <Marker
-                      key={`destination-${name}`}
-                      position={coords}
-                      title={`選擇目的地：${name}`}
-                      onClick={() => onDestinationSelect?.(name)}
-                      label={{
-                        text: name,
-                        color: isSelected ? '#1D4ED8' : '#475569',
-                        fontWeight: isSelected ? 'bold' : 'normal',
-                        fontSize: isSelected ? '12px' : '10px',
-                      }}
-                      icon={{
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: isSelected ? 9 : 6,
-                        fillColor: isSelected ? '#2563EB' : '#64748B',
-                        fillOpacity: 1,
-                        strokeWeight: 2,
-                        strokeColor: '#ffffff',
-                      }}
-                    />
-                  );
-                })}
-
-              {isCar && Object.entries(CAMPUS_PARKING_LOTS).map(([name, coords]) => {
-                const isRecommended = name === carParkingLotName;
-                if (mode === 'navigation' && !isRecommended) return null;
-                
-                return (
-                  <Marker
-                    key={name}
-                    position={coords}
-                    label={{
-                      text: isRecommended ? `⭐ ${name}` : name,
-                      color: isRecommended ? '#10B981' : '#475569',
-                      fontWeight: 'bold',
-                      fontSize: isRecommended ? '12px' : '10px',
-                    }}
-                    icon={{
-                      path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-                      scale: isRecommended ? 8 : 6,
-                      fillColor: isRecommended ? '#10B981' : '#94A3B8',
-                      fillOpacity: 1,
-                      strokeWeight: 2,
-                      strokeColor: '#ffffff',
-                    }}
-                  />
-                );
-              })}
-            </GoogleMap>
-          ) : (
-            <div className="flex flex-col items-center justify-center w-full h-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-6 text-center relative overflow-hidden">
-              {/* 背景網格線條 */}
-              <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b_1px,transparent_1px),linear-gradient(to_bottom,#1e293b_1px,transparent_1px)] bg-[size:24px_24px] opacity-30"></div>
-              
-              <div className="relative z-10 flex flex-col items-center gap-3">
-                <div className="w-16 h-16 rounded-3xl bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-400 shadow-xl shadow-blue-500/10 animate-pulse">
-                  <Compass size={32} />
-                </div>
-
-                <div>
-                  <h3 className="text-base font-black text-white tracking-wide">
-                    {isCar ? (carParkingLotName || '靜宜大學校園停車場') : `車位 ${targetSpot || ''}`}
-                  </h3>
-                  <p className="text-xs text-slate-400 font-mono mt-1">
-                    座標：24.2285° N, 120.5818° E
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 底部一鍵開啟外部真實 Google Maps 導航按鈕 */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[10000]">
+          {/* 底部開啟外部原生地圖按鈕 */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[10000]">
             <button
               onClick={openExternalGoogleMaps}
-              className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black shadow-xl flex items-center gap-2 transition-all active:scale-95 border border-blue-400/30 cursor-pointer"
+              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black shadow-xl flex items-center gap-2 transition-all active:scale-95 border border-blue-400/30 cursor-pointer"
             >
-              <Compass size={16} />
-              <span>開啟外連 Google 地圖全功能導航</span>
-              <ExternalLink size={14} />
+              <Compass size={15} />
+              <span>開啟 Google 地圖全功能導航</span>
+              <ExternalLink size={13} />
             </button>
           </div>
         </div>
