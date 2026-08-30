@@ -19,11 +19,5 @@ admin-portal/
 .vercel
 .env*.local
 *.zip
--tree HEAD
-h origin main
-test_*.ts
-inspect_*.ts
-seed_*.ts
-update_*.ts
-verify_*.cjs
+
 

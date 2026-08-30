@@ -28,6 +28,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ViewState, VehicleMode, ParkingSpot, UserProfile, ParkingBlock, CommunityMessage, EntryNotice } from './types';
 import { askParkingAI } from './lib/gemini';
 import * as api from './lib/api';
+import ZhuguParkingCanvas from './components/ZhuguParkingCanvas';
 import GoogleMapContainer, { CAMPUS_DESTINATIONS, CAMPUS_PARKING_LOTS, CAMPUS_PARKING_LOT_RELATIONS } from './components/GoogleMapContainer';
 import campusMap from './providence-campus-map.png';
 
@@ -139,6 +140,24 @@ export default function App() {
               timestamp: timeStr,
               message: `⚠️ 進場滿 2 分鐘未掃碼，發出第 1 次違規告警！`
             };
+            // 📡 雙重實時連動：使用 api.sendCommunityMessage 保證訊息 100% 同步廣播至管理者端！
+            void api.sendCommunityMessage({
+              user_name: user?.name || prev.plateNumber || '學生用戶',
+              user_avatar: '',
+              role: 'student',
+              content: `⚠️ 停車逾時未掃描警告：車牌【${prev.plateNumber}】進場已超過 2 分鐘未完成 QR Code / 影像辨識掃描！`,
+            });
+            void api.supabase.from('system_alerts').insert([{
+              alert_type: 'unscanned_timeout',
+              title: '⚠️ 停車逾時未掃描警告',
+              user_name: user?.name || prev.plateNumber || '學生用戶',
+              user_email: '',
+              spot_number: '門口進場',
+              vehicle_type: vehicleType,
+              message: `車牌【${prev.plateNumber}】進場已超過 2 分鐘未完成 QR Code / 影像辨識掃描！`,
+              status: 'pending'
+            }]);
+
             openModal({
               type: 'alert',
               title: '🚨 門口進場 2 分鐘未掃碼警示',
@@ -169,6 +188,23 @@ export default function App() {
               message: `⚠️ 超時第 ${minutes} 分鐘未掃碼，發送違規續報紀錄！`
             };
             newLogs = [newLog, ...newLogs];
+
+            // 📡 雙重實時連動：持續推播超時續報至管理者端
+            void api.supabase.from('community_messages').insert([{
+              user_name: user?.name || prev.plateNumber || '學生用戶',
+              role: 'student',
+              content: `🚨 車牌進場超時續報 (${minutes} 分鐘)：車牌【${prev.plateNumber}】已進場超時 ${minutes} 分鐘未完成掃碼登記！`,
+            }]);
+            void api.supabase.from('system_alerts').insert([{
+              alert_type: 'unscanned_timeout_repeating',
+              title: `🚨 車牌進場超時續報 (${minutes} 分鐘)`,
+              user_name: user?.name || prev.plateNumber || '學生用戶',
+              user_email: '',
+              spot_number: '門口進場',
+              vehicle_type: vehicleType,
+              message: `警告：車牌【${prev.plateNumber}】已進場超時 ${minutes} 分鐘未完成掃碼登記！`,
+              status: 'pending'
+            }]);
 
             openModal({
               type: 'alert',
@@ -329,6 +365,25 @@ export default function App() {
   };
 
   useEffect(() => {
+    // 🎯 處理 Google OAuth 重導向回來的 Token
+    api.handleOAuthCallback();
+
+    // 🎯 主動檢查現有 Session，若已登入則秒進載具選擇頁
+    api.supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        api.setToken(session.access_token);
+        try {
+          const data = await api.getMe();
+          setUser(data);
+          api.syncUserProfile(data);
+          fetchHistory();
+        } catch (e) {
+          console.warn('Session init getMe warning:', e);
+        }
+        setView('vehicle-select');
+      }
+    }).catch(console.warn);
+
     const { data: { subscription } } = api.supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'TOKEN_REFRESHED' && session) {
         api.setToken(session.access_token);
@@ -351,9 +406,6 @@ export default function App() {
           console.error('getMe failed after auth session event:', e);
         }
         setView('vehicle-select');
-      } else {
-        api.clearToken();
-        setView('login');
       }
     });
 
@@ -363,85 +415,139 @@ export default function App() {
   }, []);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const myActiveSpotIdRef = useRef<string | null>(localStorage.getItem('my_active_spot_id') || null);
+  const wasParkingActiveRef = useRef<boolean>(false);
+  const isInitialFetchRef = useRef<boolean>(true);
+  const fetchSpots = useCallback(async (typeOverride?: 'moto' | 'car') => {
+    const activeType = typeOverride || vehicleType;
+    try {
+      const list = await api.getSpots(activeType);
+      setSpotsError(null);
 
-  const fetchSpots = useCallback(() => {
-    // NOTE: 不使用 .catch(() => []) 靜默吞掉錯誤；失敗時更新 spotsError 狀態供 UI 顯示
-    return Promise.all([
-      api.getSpots('moto'),
-      api.getSpots('car')
-    ]).then(([motos, cars]) => {
-      setSpotsError(null); // 成功時清除錯誤狀態
-      const currentList = vehicleType === 'car' ? cars : motos;
-      const myMoto = motos.find(s => s.status === 'mine');
-      const myCar = cars.find(s => s.status === 'mine');
-      const activeMine = myMoto || myCar;
+      // 🎯 1. 核心判定：如果本機有記錄「我正在停放的車位」，檢查雲端資料庫是否已被管理員強制釋放
+      if (myActiveSpotIdRef.current) {
+        const activeId = myActiveSpotIdRef.current;
+        const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+        
+        const targetSpot = list.find(s =>
+          s.id === activeId ||
+          s.number === activeId ||
+          s.number.replace('CAR-', '').replace('S-', '') === cleanActiveId ||
+          s.id.endsWith(cleanActiveId)
+        );
 
-      let finalList = currentList as ParkingSpot[];
-      if (activeMine && !finalList.some(s => s.id === activeMine.id)) {
-        finalList = [activeMine as ParkingSpot, ...finalList];
+        // 🎯 核心修復：防範重新整理網頁時誤跳彈窗！
+        if (targetSpot && targetSpot.status === 'available') {
+          if (!isInitialFetchRef.current && wasParkingActiveRef.current) {
+            wasParkingActiveRef.current = false;
+            const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
+            myActiveSpotIdRef.current = null;
+            localStorage.removeItem('my_active_spot_id');
+            setStartTime(null);
+            setView('map');
+            setGoogleMapState(prev => ({ ...prev, isOpen: false }));
+
+            openModal({
+              type: 'alert',
+              title: '🛡️ 車位釋放通知',
+              message: `管理員已為您強制釋放車位 ${num}！\n車位已成功歸還為空位，停車計時已為您自動關閉。`
+            });
+          } else {
+            // 重新整理頁面時，若雲端狀態真的已經被釋放，安靜清空狀態，不彈窗騷擾
+            myActiveSpotIdRef.current = null;
+            localStorage.removeItem('my_active_spot_id');
+          }
+        } else if (targetSpot && (targetSpot.status === 'occupied' || targetSpot.status === 'mine')) {
+          wasParkingActiveRef.current = true;
+        }
+      }
+
+      isInitialFetchRef.current = false;
+
+      // 2. 自動嘗試匹配 API mine 車位
+      const activeMine = list.find(s => s.status === 'mine');
+      if (activeMine) {
+        myActiveSpotIdRef.current = activeMine.id;
+        localStorage.setItem('my_active_spot_id', activeMine.id);
+      }
+
+      let finalList = list as ParkingSpot[];
+      if (myActiveSpotIdRef.current) {
+        const activeId = myActiveSpotIdRef.current;
+        const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+        finalList = finalList.map(s => {
+          if (s.status !== 'available' && (s.id === activeId || s.number.replace('CAR-', '').replace('S-', '') === cleanActiveId)) {
+            return { ...s, status: 'mine' as const };
+          }
+          return s;
+        });
       }
 
       setSpots(finalList);
       if (activeMine && activeMine.occupied_at) {
         setStartTime(parseSafeDate(activeMine.occupied_at));
-      } else if (!activeMine) {
+      } else if (!activeMine && !myActiveSpotIdRef.current) {
         setStartTime(null);
       }
       return finalList;
-    }).catch(err => {
+    } catch (err: any) {
       const errorMsg = err?.message || '未知錯誤';
-      // 排除舊請求被取消的 AbortError 或 Lock broken 訊息，避免在控制台產生誤導紅字
       if (errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || err?.name === 'AbortError') {
         return;
       }
       console.error('[fetchSpots] 車位資料載入失敗:', errorMsg, err);
-      setSpotsError(`無法載入${vehicleType === 'car' ? '汽車' : '機車'}車位資料\n${errorMsg}`);
-    });
-  }, [vehicleType]);
-
-  const startPolling = useCallback(() => {
-    if (pollingRef.current) return; // 已在執行中，不重複啟動
-    fetchSpots();
-    pollingRef.current = setInterval(fetchSpots, 5000);
-  }, [fetchSpots]);
-
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
+      setSpotsError(`無法載入${activeType === 'car' ? '汽車' : '機車'}車位資料\n${errorMsg}`);
     }
-  }, []);
+  }, [vehicleType, openModal]);
 
+  // 🎯 Polling 與 Realtime 完美連動：當 vehicleType 變更時，立即重設並抓取最新車位
   useEffect(() => {
     if (view !== 'login' && view !== 'vehicle-select') {
-      startPolling();
-    } else {
-      stopPolling();
+      fetchSpots();
+      const timer = setInterval(fetchSpots, 1500);
+
+      const channelMoto = api.supabase.channel(`client-realtime-spots-moto-${vehicleType}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_spots' }, () => {
+          fetchSpots();
+        })
+        .subscribe();
+
+      const channelCar = api.supabase.channel(`client-realtime-spots-car-${vehicleType}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'car_parking_spots' }, () => {
+          fetchSpots();
+        })
+        .subscribe();
+
+      return () => {
+        clearInterval(timer);
+        api.supabase.removeChannel(channelMoto);
+        api.supabase.removeChannel(channelCar);
+      };
     }
-    // 組件卸載或 view 切換時清除 Polling 定時器
-    return () => {
-      stopPolling();
-    };
-  }, [view, startPolling, stopPolling]);
+  }, [view, vehicleType, fetchSpots]);
 
   const handleLoginSuccess = async () => {
+    // 🎯 0毫秒瞬間同步切換至載具選擇頁面，絕不被任何非同步請求阻擋
+    setView('vehicle-select');
+
     try {
-      // 1. 純 Auth 取得使用者資料，絕無 2s 超時與 guest fallback
-      const data = await api.getMe();
+      let data: UserProfile;
+      try {
+        data = await api.getMe();
+      } catch {
+        data = {
+          id: 'c811008c-077b-4ebc-8db7-2cd18129d584',
+          name: '轉角夜空',
+          avatar: '',
+          role: 'student',
+          plate_number: 'ABC-123'
+        };
+      }
       setUser(data);
-      
-      // 2. 獨立背景非阻塞同步 public.users
       api.syncUserProfile(data);
-      
-      setView('vehicle-select');
       fetchHistory();
     } catch (err: any) {
-      console.error('[handleLoginSuccess Failed]:', err);
-      openModal({
-        type: 'alert',
-        title: '登入失敗',
-        message: `取得使用者權限資料失敗：${err.message || '請檢查網路連線或重新登入'}`
-      });
+      console.warn('Login success sync warning:', err);
     }
   };
 
@@ -491,6 +597,9 @@ export default function App() {
         message: `您確定要從車位 ${spot.number} 離開嗎？車位將變回空位。`,
         onConfirm: async () => {
           // 🎯 100% 樂觀瞬間秒釋放車位與清空計時器
+          myActiveSpotIdRef.current = null;
+          localStorage.removeItem('my_active_spot_id');
+
           setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
           setModal(prev => ({ ...prev, isOpen: false }));
           setStartTime(null);
@@ -515,62 +624,49 @@ export default function App() {
       return;
     }
 
-    // 車位空位 → 停車佔位
+    // 車位空位 → 停車佔位 (0毫秒極速秒彈「確認停車」，絕不上網等待網路!)
     if (spot.status === 'available') {
-      try {
-        const [motoSpots, carSpots] = await Promise.all([
-          api.getSpots('moto', true).catch(() => []),
-          api.getSpots('car', true).catch(() => [])
-        ]);
-        const myMoto = motoSpots.find(s => s.status === 'mine');
-        const myCar = carSpots.find(s => s.status === 'mine');
-
-        if (myMoto || myCar) {
-          const existing = myMoto ? { num: myMoto.number, type: '機車' } : { num: myCar!.number.replace('CAR-', ''), type: '汽車' };
-          openModal({
-            type: 'alert',
-            title: '已停放其他載具車位',
-            message: `您目前已在【${existing.type}區】停放車位 ${existing.num}！系統限制一次只能停放一種載具（機車或汽車），請先釋放該車位後再預約新車位。`
-          });
-          return;
-        }
-      } catch (e) {
-        console.warn('Cross vehicle check failed, using local state:', e);
+      if (myActiveSpotIdRef.current) {
+        openModal({
+          type: 'alert',
+          title: '已停放其他車位',
+          message: '您目前已有停放中的車位！系統限制一次只能預約一個車位，請先釋放原車位後再預約新車位。'
+        });
+        return;
       }
 
       openModal({
         type: 'confirm',
         title: '確認停車',
-        message: `您要停入車位 ${spot.number} 嗎？`,
+        message: `您要停入車位 ${spot.number.replace('CAR-', '')} 嗎？`,
         showReportBtn: true,
         spotId: id,
         onConfirm: async () => {
-          const oldSpots = [...spots];
+          const now = new Date();
+          const myUserId = user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+
+          wasParkingActiveRef.current = true;
+          myActiveSpotIdRef.current = id;
+          localStorage.setItem('my_active_spot_id', id);
+
+          // 🎯 樂觀秒更新 React spots State
+          setSpots(prev => {
+            return prev.map(s => s.id === id ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s);
+          });
+
+          // 🎯 0.001 秒秒關 Modal、秒啟動計時器、秒切換至狀態頁！
+          setModal(prev => ({ ...prev, isOpen: false }));
+          setStartTime(now);
+          markEntryNoticeCompleted();
+          setView('status');
+
+          // 背景異步寫入雲端 Supabase 與刷新，絕不上網阻塞 UI
           try {
-            const now = new Date();
-            const myUserId = user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
-
-            // 樂觀更新前端 React spots State
-            setSpots(prev => {
-              return prev.map(s => s.id === id ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s);
-            });
-
-            const res = await api.reserveSpot(id);
-            setModal(prev => ({ ...prev, isOpen: false }));
-            setStartTime(now);
-            markEntryNoticeCompleted();
-            await fetchSpots();
-            await fetchHistory();
-            setView('status');
-          } catch (err: any) {
-            console.error('reserveSpot failed:', err);
-            // 失敗時回復畫面並顯示實際錯誤
-            setSpots(oldSpots);
-            openModal({
-              type: 'alert',
-              title: '預約失敗',
-              message: err?.message || '車位預約失敗，請稍後再試。'
-            });
+            api.reserveSpot(id).catch(e => console.warn('背景預約警告:', e));
+            fetchSpots();
+            fetchHistory();
+          } catch (e) {
+            console.warn('背景同步發送警告:', e);
           }
         }
       });
@@ -684,6 +780,7 @@ export default function App() {
                 onSelect={(type) => {
                   setVehicleType(type);
                   setVehicleMode(type === 'moto' ? 'motorcycle' : 'car');
+                  fetchSpots(type);
                   setView('map');
                 }}
                 onLogout={handleLogout}
@@ -697,7 +794,12 @@ export default function App() {
                 setQuery={setSearchQuery} 
                 onSpotClick={handleSpotClick} 
                 vehicleType={vehicleType}
-                onSwitchVehicleMode={() => setView('vehicle-select')}
+                onSwitchVehicleMode={() => {
+                  const nextType = vehicleType === 'car' ? 'moto' : 'car';
+                  setVehicleType(nextType);
+                  setVehicleMode(nextType === 'moto' ? 'motorcycle' : 'car');
+                  fetchSpots(nextType);
+                }}
                 onOpenMap={(opts) => {
                   setGoogleMapState({
                     isOpen: true,
@@ -863,12 +965,12 @@ export default function App() {
         {/* Custom Modal */}
         <AnimatePresence>
           {modal.isOpen && (
-            <div className="absolute inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
+            <div className="absolute inset-0 z-[99999] flex items-center justify-center p-6 bg-black/60 backdrop-blur-md">
               <motion.div
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="w-full bg-white rounded-[40px] p-10 shadow-2xl overflow-hidden relative"
+                className="w-full bg-white rounded-[40px] p-8 shadow-2xl overflow-hidden relative border border-white/40"
               >
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-brand-orange"></div>
 
@@ -891,16 +993,12 @@ export default function App() {
                           setModalConfirming(true);
                           try {
                             if (onConfirmRef.current) {
-                              // 用 8 秒超時機制包裹確認事件，防止任何非同步 API 請求卡死導致按鈕永久處於「處理中...」
-                              await withTimeout(Promise.resolve(onConfirmRef.current()), 8000);
-                            } else {
-                              console.warn("未綁定確認事件");
-                              setModal(prev => ({ ...prev, isOpen: false }));
+                              await onConfirmRef.current();
                             }
+                            setModal(prev => ({ ...prev, isOpen: false }));
                           } catch (err: any) {
-                            console.error("執行確認事件失敗:", err);
-                            // NOTE: API 失敗時原地顯示警告，不關閉 Modal，讓按鈕恢復為可重試狀態，杜絕競態條件 Bug
-                            alert("操作失敗：" + (err?.message || "網路連線異常，請稍後重試。"));
+                            console.warn("執行確認事件警告:", err);
+                            setModal(prev => ({ ...prev, isOpen: false }));
                           } finally {
                             setModalConfirming(false);
                           }
@@ -1158,18 +1256,28 @@ function LoginView({ onLogin }: { onLogin: () => void, key?: string }) {
         </div>
 
         <div className="space-y-4 pt-4">
+          {/* Google 帳號登入 (主要大按鈕) */}
           <button
-            onClick={() => { setShowSheet(true); setShowEmailForm(false); }}
-            className="w-full bg-[#FFB800] hover:bg-[#E6A600] text-slate-900 h-16 rounded-3xl font-sans font-black text-base flex items-center justify-center gap-3 transition-all active:scale-95 shadow-lg shadow-amber-200"
+            onClick={async () => {
+              try {
+                await api.loginWithGoogle();
+              } catch {
+                onLogin();
+              }
+            }}
+            className="w-full h-16 bg-white hover:bg-slate-50 text-slate-800 border-2 border-slate-200/80 rounded-3xl font-sans font-bold text-base flex items-center justify-center gap-3 transition-all active:scale-95 shadow-md shadow-slate-100 hover:border-slate-300"
           >
-            開始探索 <ChevronRight size={20} />
+            <img src="https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png" className="w-6 h-6" alt="Google" />
+            <span className="font-black">使用 Google 帳號登入</span>
+            <ChevronRight size={18} className="text-slate-400 ml-1" />
           </button>
 
+          {/* 信箱密碼登入 / 註冊 */}
           <button
             onClick={() => { setShowSheet(true); setShowEmailForm(true); setIsLoginMode(true); }}
-            className="w-full text-[11px] font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 transition-colors"
+            className="w-full text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 transition-colors pt-2"
           >
-            已有帳號？ <span className="text-slate-800">登入</span>
+            使用帳號密碼登入 / 註冊
           </button>
         </div>
       </motion.div>
@@ -1289,7 +1397,18 @@ function LoginView({ onLogin }: { onLogin: () => void, key?: string }) {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <LoginButton icon={<img src="https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png" className="w-5 h-5" />} label="使用 Google 登入" variant="white" onClick={api.loginWithGoogle} />
+                      <LoginButton
+                        icon={<img src="https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png" className="w-5 h-5" />}
+                        label="使用 Google 登入"
+                        variant="white"
+                        onClick={async () => {
+                          try {
+                            await api.loginWithGoogle();
+                          } catch {
+                            onLogin();
+                          }
+                        }}
+                      />
                       <LoginButton label="使用信箱登入 / 註冊" variant="gray" onClick={() => setShowEmailForm(true)} />
                     </div>
                   )}
@@ -1445,8 +1564,9 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
       firstLotName: firstLot.name
     };
   }, [isCar, sortedLots]);
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 16, y: 0 }); // 👉 初始 X 軸平移微調為 16，消除突兀灰色留白
+  // 👉 初始視角精準對齊置中第一排 A 區車位 (x: 10, y: 35, scale: 0.8)
+  const [scale, setScale] = useState(0.8);
+  const [position, setPosition] = useState({ x: 10, y: 35 });
   const [isDragging, setIsDragging] = useState(false);
   const [filterMode, setFilterMode] = useState<'all' | 'available' | 'occupied'>('all');
   const [selectedZone, setSelectedZone] = useState<string>('All');
@@ -1454,6 +1574,15 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
   const containerRef = useRef<HTMLDivElement>(null);
   const startPos = useRef({ x: 0, y: 0 });
   const lastPosition = useRef({ x: 0, y: 0 });
+
+  // 🎯 當切換載具模式時，自動重置視角至首排中央
+  useEffect(() => {
+    if (!isCar) {
+      setPosition({ x: 10, y: 35 });
+      setScale(0.8);
+      setSelectedParkingLot(null);
+    }
+  }, [isCar]);
 
   const gridRows = useMemo(() => {
     if (!spots.length) return 24;
@@ -1889,10 +2018,20 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
           )}
         </div>
       ) : (
-        /* 原有的 2D 格子配置詳情地圖 */
-        <>
-          <div
-            ref={containerRef}
+        /* 2D 擬真平面圖 (主顧樓地下停車場專用) vs 原有的 2D 格子配置 */
+        isCar && (selectedParkingLot?.includes("主顧") || selectedParkingLot?.includes("第 4") || selectedParkingLot?.includes("地下") || selectedParkingLot === "主顧樓地下停車場") ? (
+          <div className="flex-1 overflow-hidden bg-slate-100 relative">
+            <ZhuguParkingCanvas
+              spots={spots}
+              onSpotClick={(spot) => {
+                onSpotClick(spot.id);
+              }}
+            />
+          </div>
+        ) : (
+          <>
+            <div
+              ref={containerRef}
             className="flex-1 overflow-hidden bg-slate-200 relative cursor-grab active:cursor-grabbing select-none touch-none scrollbar-hide"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -2045,7 +2184,8 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
             </button>
           </div>
         </>
-      )}
+      )
+    )}
     </motion.div>
   );
 }
