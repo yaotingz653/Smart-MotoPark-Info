@@ -781,12 +781,11 @@ export default function App() {
           markEntryNoticeCompleted();
           setView('status');
 
-          try {
-            await api.reserveSpot(standardizedId);
-            await Promise.all([fetchSpots(), fetchHistory()]);
-          } catch (e) {
-            console.warn('停車同步發送警告:', e);
-          }
+          // 背景非同步發送 API，完全不阻擋 UI 跳轉！
+          api.reserveSpot(standardizedId).then(() => {
+            fetchSpots();
+            fetchHistory();
+          }).catch(console.warn);
         }
       });
     }
@@ -1022,13 +1021,11 @@ export default function App() {
 
                       setView('map');
 
-                      // 🎯 4. 發送 API 釋放資料庫車位
-                      try {
-                        await api.releaseSpot(targetReleaseId);
-                        await Promise.all([fetchSpots(), fetchHistory()]);
-                      } catch (e) {
-                        console.warn("釋放連線警告:", e);
-                      }
+                      // 🎯 4. 背景非同步發送 API 釋放資料庫車位
+                      api.releaseSpot(targetReleaseId).then(() => {
+                        fetchSpots();
+                        fetchHistory();
+                      }).catch(console.warn);
                     }
                   });
                 }}

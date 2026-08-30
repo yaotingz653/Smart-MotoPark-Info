@@ -41,7 +41,10 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true
+    detectSessionInUrl: true,
+    lock: async (_name: string, _acquireTimeout: number, fn: () => Promise<any>) => {
+      return await fn();
+    }
   }
 });
 
@@ -425,16 +428,9 @@ export interface SpotActionResult {
  * @returns 操作結果
  */
 export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const rawUserId = session?.user?.id;
-  const isUuid = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
-  const dbUserId = isUuid ? rawUserId : null;
-  const localUserId = rawUserId || 'student-guest';
-  const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
-
+  const localUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
   const directNow = new Date().toISOString();
   const directSpotNumber = normalizeSpotNumber(spotId);
-  const table = isCar ? 'car_parking_spots' : 'parking_spots';
 
   // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，並先結算所有舊紀錄
   try {
@@ -467,8 +463,9 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 
     // 🎯 雲端歷史安全寫入：避免 spot_id 指向 parking_spots 引發 409 外鍵衝突
     try {
-      const historySpotId = isCar ? 'LOT-ROADSIDE-4' : spotId;
-      const historyUserId = dbUserId || '6e4f4702-d7bf-4686-bf70-8676ceb5317f';
+      const isCarSpot = spotId.startsWith('CAR-') || spotId.includes('ZHUGU') || /^[A-J][0-9]{2}$/i.test(directSpotNumber);
+      const historySpotId = isCarSpot ? 'LOT-ROADSIDE-4' : spotId;
+      const historyUserId = '6e4f4702-d7bf-4686-bf70-8676ceb5317f';
       await supabase.from('parking_history').insert({
         user_id: historyUserId,
         spot_id: historySpotId,
