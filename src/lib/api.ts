@@ -447,7 +447,11 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 
   try {
     const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
-    await rawDirectUpdate(table, spotId, updateBody);
+    // 🎯 雙表全佔用保險：同時對 car_parking_spots 與 parking_spots 發送佔用，徹底杜絕車種判斷失誤
+    await Promise.allSettled([
+      rawDirectUpdate('car_parking_spots', spotId, updateBody),
+      rawDirectUpdate('parking_spots', spotId, updateBody)
+    ]);
 
     // 🎯 雲端歷史安全寫入：避免 spot_id 指向 parking_spots 引發 409 外鍵衝突
     try {
