@@ -475,21 +475,21 @@ export default function App() {
       ]);
       setSpotsError(null);
 
-      // 🎯 1. 雙載具強制釋放檢查 (僅在非初始載入且處於停車狀態中時觸發彈窗)
+      // 🎯 1. 嚴格載具類型隔離檢查 (避免汽車 G04 被機車 G04 誤殺)
       if (myActiveSpotIdRef.current) {
         const activeId = myActiveSpotIdRef.current;
-        const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-        const allList = [...motos, ...cars];
+        const isCarActive = activeId.startsWith('CAR-') || activeId.includes('ZHUGU');
+        const cleanActiveId = api.normalizeSpotNumber(activeId);
+        const currentTargetList = isCarActive ? cars : motos;
         
-        const targetSpot = allList.find(s =>
+        const targetSpot = currentTargetList.find(s =>
           s.id === activeId ||
-          s.number === activeId ||
-          s.number.replace('CAR-', '').replace('S-', '') === cleanActiveId ||
-          s.id.endsWith(cleanActiveId)
+          api.normalizeSpotNumber(s.number) === cleanActiveId ||
+          api.normalizeSpotNumber(s.id) === cleanActiveId
         );
 
         if (targetSpot && targetSpot.status === 'available') {
-          const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
+          const num = api.normalizeSpotNumber(targetSpot.number);
           const wasActive = wasParkingActiveRef.current;
           myActiveSpotIdRef.current = null;
           wasParkingActiveRef.current = false;
@@ -517,8 +517,8 @@ export default function App() {
       setCarSpots(cars as ParkingSpot[]);
 
       // 3. 自動嘗試匹配 API mine 車位
-      const allList = [...motos, ...cars];
-      const activeMine = allList.find(s => s.status === 'mine');
+      const currentList = vehicleType === 'car' ? cars : motos;
+      const activeMine = currentList.find(s => s.status === 'mine') || [...motos, ...cars].find(s => s.status === 'mine');
       if (activeMine) {
         myActiveSpotIdRef.current = activeMine.id;
         wasParkingActiveRef.current = true;
@@ -659,8 +659,49 @@ export default function App() {
       return;
     }
 
-    // 車位已被他人佔用 → 無法操作
+    // 車位已被佔用 → 智慧判斷是否正是我的愛車 (防範誤判定為他人佔用)
     if (spot.status === 'occupied') {
+      const localHistRaw = localStorage.getItem('smart_parking_history');
+      let latestHistNum: string | null = null;
+      try {
+        if (localHistRaw) {
+          const list = JSON.parse(localHistRaw);
+          if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
+            latestHistNum = api.normalizeSpotNumber(list[0].spot_number);
+          }
+        }
+      } catch {}
+
+      const isActuallyMyCar = isThisMySpot || (cleanActiveStored && cleanTarget === cleanActiveStored) || (latestHistNum && cleanTarget === latestHistNum);
+
+      if (isActuallyMyCar) {
+        // 🎯 自動校正為愛車並進入離開確認流程
+        myActiveSpotIdRef.current = id;
+        localStorage.setItem('my_active_spot_id', id);
+        openModal({
+          type: 'confirm',
+          title: '確認離開',
+          message: `您確定要從車位 ${api.normalizeSpotNumber(spot.number)} 離開嗎？車位將變回空位。`,
+          onConfirm: async () => {
+            myActiveSpotIdRef.current = null;
+            localStorage.removeItem('my_active_spot_id');
+
+            setSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            setModal(prev => ({ ...prev, isOpen: false }));
+            setStartTime(null);
+            setSearchQuery("");
+
+            try {
+              await api.releaseSpot(id);
+              await Promise.all([fetchSpots(), fetchHistory()]);
+            } catch (err: any) {
+              console.warn("釋放連線警示:", err);
+            }
+          }
+        });
+        return;
+      }
+
       openModal({
         type: 'alert',
         title: '車位佔用中',
