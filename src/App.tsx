@@ -610,13 +610,22 @@ export default function App() {
   };
 
   const handleSpotClick = async (id: string) => {
+    const isTargetCar = id.startsWith('CAR-') || id.includes('ZHUGU');
+    if (isTargetCar && vehicleType !== 'car') {
+      setVehicleType('car');
+      setVehicleMode('car');
+    } else if (!isTargetCar && vehicleType !== 'moto') {
+      setVehicleType('moto');
+      setVehicleMode('motorcycle');
+    }
+
+    const currentList = isTargetCar ? carSpots : motoSpots;
     const cleanTarget = api.normalizeSpotNumber(id);
-    const spot = spots.find(s => 
+    const spot = currentList.find(s => 
       s.id === id || 
       api.normalizeSpotNumber(s.number) === cleanTarget ||
       api.normalizeSpotNumber(s.id) === cleanTarget
-    );
-    if (!spot) return;
+    ) || { id, number: isTargetCar ? `CAR-${cleanTarget}` : `S-${cleanTarget}`, status: 'available' as const };
 
     const activeStoredId = localStorage.getItem('my_active_spot_id') || myActiveSpotIdRef.current;
     const cleanActiveStored = api.normalizeSpotNumber(activeStoredId);
@@ -633,7 +642,12 @@ export default function App() {
           myActiveSpotIdRef.current = null;
           localStorage.removeItem('my_active_spot_id');
 
-          setSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          if (isTargetCar) {
+            setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          } else {
+            setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          }
+
           setModal(prev => ({ ...prev, isOpen: false }));
           setStartTime(null);
           setSearchQuery("");
@@ -686,7 +700,12 @@ export default function App() {
             myActiveSpotIdRef.current = null;
             localStorage.removeItem('my_active_spot_id');
 
-            setSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            if (isTargetCar) {
+              setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            } else {
+              setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            }
+
             setModal(prev => ({ ...prev, isOpen: false }));
             setStartTime(null);
             setSearchQuery("");
@@ -714,7 +733,7 @@ export default function App() {
     if (spot.status === 'available') {
       // 🎯 智慧檢查：若本機有記錄停車，但雲端該車位實際上已是空位，自動解除舊鎖
       if (myActiveSpotIdRef.current) {
-        const currentlyOccupied = spots.find(s => 
+        const currentlyOccupied = currentList.find(s => 
           (s.id === myActiveSpotIdRef.current || api.normalizeSpotNumber(s.number) === api.normalizeSpotNumber(myActiveSpotIdRef.current)) && 
           (s.status === 'mine' || s.status === 'occupied')
         );
@@ -747,10 +766,16 @@ export default function App() {
           myActiveSpotIdRef.current = id;
           localStorage.setItem('my_active_spot_id', id);
 
-          // 🎯 樂觀秒更新 React spots State
-          setSpots(prev => {
-            return prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s);
-          });
+          // 🎯 樂觀秒更新 React spots State (精確對齊目標車種)
+          if (isTargetCar) {
+            setVehicleType('car');
+            setVehicleMode('car');
+            setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+          } else {
+            setVehicleType('moto');
+            setVehicleMode('motorcycle');
+            setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+          }
 
           // 🎯 0.001 秒秒關 Modal、秒啟動計時器、秒切換至狀態頁！
           setModal(prev => ({ ...prev, isOpen: false }));
@@ -2411,7 +2436,14 @@ function StatusView({ spots, startTime, endTime, onViewOnMap, onRelease, onScanC
   vehicleType: 'moto' | 'car',
   key?: string
 }) {
-  const mySpot = spots.find(s => s.status === 'mine');
+  const activeStoredId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+  const cleanActiveStored = api.normalizeSpotNumber(activeStoredId);
+  const mySpot = spots.find(s => s.status === 'mine' || (cleanActiveStored && api.normalizeSpotNumber(s.number) === cleanActiveStored)) || (cleanActiveStored ? {
+    id: activeStoredId || `CAR-ZHUGU-${cleanActiveStored}`,
+    number: `CAR-${cleanActiveStored}`,
+    status: 'mine' as const,
+    parkingBlockId: 'zhugu'
+  } : undefined);
   const [selectedOrigin, setSelectedOrigin] = useState<OriginOption>('gps');
 
   const isCar = vehicleType === 'car';
