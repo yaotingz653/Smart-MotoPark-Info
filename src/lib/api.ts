@@ -382,22 +382,16 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 
   try {
     if (isCar) {
-      // 🎯 採用標準原生的 .eq 更新，100% 確保 PostgREST 回傳 200 OK
-      await Promise.all([
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', directSpotNumber),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `CAR-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `CAR-${dashFormatted}`),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', spotId),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `CAR-ZHUGU-${dashFormatted}`)
-      ]);
+      // 🎯 原子化單一請求更新，絕不發送併發衝突請求
+      await supabase.from('car_parking_spots')
+        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .or(`id.eq.${spotId},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber},id.eq.CAR-ZHUGU-${directSpotNumber},id.eq.CAR-ZHUGU-${dashFormatted}`)
+        .select();
     } else {
-      await Promise.all([
-        supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', directSpotNumber),
-        supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `S-${directSpotNumber}`),
-        supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', spotId),
-        supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `S-${directSpotNumber}`)
-      ]);
+      await supabase.from('parking_spots')
+        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .or(`id.eq.${spotId},number.eq.S-${directSpotNumber},number.eq.${directSpotNumber},id.eq.S-${dashFormatted}`)
+        .select();
     }
 
     // 🎯 雙軌歷史持久化：本地 localStorage 100% 確保寫入當前真實時間紀錄
@@ -464,21 +458,15 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
 
   try {
     if (isCar) {
-      await Promise.all([
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', directSpotNumber),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `CAR-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `CAR-${dashFormatted}`),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', spotId),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `CAR-ZHUGU-${dashFormatted}`)
-      ]);
+      await supabase.from('car_parking_spots')
+        .update({ status: 'available', occupied_by: null, occupied_at: null })
+        .or(`id.eq.${spotId},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber},id.eq.CAR-ZHUGU-${directSpotNumber},id.eq.CAR-ZHUGU-${dashFormatted}`)
+        .select();
     } else {
-      await Promise.all([
-        supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', directSpotNumber),
-        supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `S-${directSpotNumber}`),
-        supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', spotId),
-        supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `S-${directSpotNumber}`)
-      ]);
+      await supabase.from('parking_spots')
+        .update({ status: 'available', occupied_by: null, occupied_at: null })
+        .or(`id.eq.${spotId},number.eq.S-${directSpotNumber},number.eq.${directSpotNumber},id.eq.S-${dashFormatted}`)
+        .select();
     }
 
     // 🎯 雙軌歷史持久化更新離場時間

@@ -598,7 +598,13 @@ export default function App() {
   };
 
   const handleSpotClick = async (id: string) => {
-    const spot = spots.find(s => s.id === id);
+    const cleanTarget = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+    const spot = spots.find(s => 
+      s.id === id || 
+      s.number === id ||
+      s.id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '') === cleanTarget ||
+      s.number.replace('CAR-', '').replace('S-', '') === cleanTarget
+    );
     if (!spot) return;
 
     // 車位已停用 → 無法操作
