@@ -436,29 +436,20 @@ export default function App() {
           s.id.endsWith(cleanActiveId)
         );
 
-        // 🎯 核心修復：防範重新整理網頁時誤跳彈窗！
+        // 🎯 核心修復：只要偵測到雲端車位被釋放為空位，0.1秒秒切地圖並跳通知！
         if (targetSpot && targetSpot.status === 'available') {
-          if (!isInitialFetchRef.current && wasParkingActiveRef.current) {
-            wasParkingActiveRef.current = false;
-            const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
-            myActiveSpotIdRef.current = null;
-            localStorage.removeItem('my_active_spot_id');
-            setStartTime(null);
-            setView('map');
-            setGoogleMapState(prev => ({ ...prev, isOpen: false }));
+          const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
+          myActiveSpotIdRef.current = null;
+          localStorage.removeItem('my_active_spot_id');
+          setStartTime(null);
+          setView('map');
+          setGoogleMapState(prev => ({ ...prev, isOpen: false }));
 
-            openModal({
-              type: 'alert',
-              title: '🛡️ 車位釋放通知',
-              message: `管理員已為您強制釋放車位 ${num}！\n車位已成功歸還為空位，停車計時已為您自動關閉。`
-            });
-          } else {
-            // 重新整理頁面時，若雲端狀態真的已經被釋放，安靜清空狀態，不彈窗騷擾
-            myActiveSpotIdRef.current = null;
-            localStorage.removeItem('my_active_spot_id');
-          }
-        } else if (targetSpot && (targetSpot.status === 'occupied' || targetSpot.status === 'mine')) {
-          wasParkingActiveRef.current = true;
+          openModal({
+            type: 'alert',
+            title: '🛡️ 車位釋放通知',
+            message: `管理員已為您強制釋放車位 ${num}！\n車位已成功歸還為空位，停車計時已為您自動關閉。`
+          });
         }
       }
 
