@@ -476,11 +476,11 @@ export default function App() {
       ]);
       setSpotsError(null);
 
-      // 🎯 1. 嚴格載具類型隔離檢查 (避免汽車 G04 被機車 G04 誤殺)
+      // 🎯 1. 嚴格載具類型隔離檢查 (避免跨車種誤殺)
       if (myActiveSpotIdRef.current) {
         const activeId = myActiveSpotIdRef.current;
-        const isCarActive = activeId.startsWith('CAR-') || activeId.includes('ZHUGU');
         const cleanActiveId = api.normalizeSpotNumber(activeId);
+        const isCarActive = activeId.startsWith('CAR-') || activeId.includes('ZHUGU') || vehicleType === 'car' || /^[A-J][0-9]{2}$/i.test(cleanActiveId);
         const currentTargetList = isCarActive ? cars : motos;
         
         const targetSpot = currentTargetList.find(s =>
@@ -611,7 +611,10 @@ export default function App() {
   };
 
   const handleSpotClick = async (id: string) => {
-    const isTargetCar = id.startsWith('CAR-') || id.includes('ZHUGU');
+    const cleanTarget = api.normalizeSpotNumber(id);
+    const isTargetCar = id.startsWith('CAR-') || id.includes('ZHUGU') || vehicleType === 'car' || /^[A-J][0-9]{2}$/i.test(cleanTarget);
+    const standardizedId = isTargetCar ? `CAR-ZHUGU-${cleanTarget}` : `S-${cleanTarget}`;
+
     if (isTargetCar && vehicleType !== 'car') {
       setVehicleType('car');
       setVehicleMode('car');
@@ -621,12 +624,12 @@ export default function App() {
     }
 
     const currentList = isTargetCar ? carSpots : motoSpots;
-    const cleanTarget = api.normalizeSpotNumber(id);
     const spot = currentList.find(s => 
       s.id === id || 
+      s.id === standardizedId ||
       api.normalizeSpotNumber(s.number) === cleanTarget ||
       api.normalizeSpotNumber(s.id) === cleanTarget
-    ) || { id, number: isTargetCar ? `CAR-${cleanTarget}` : `S-${cleanTarget}`, status: 'available' as const };
+    ) || { id: standardizedId, number: isTargetCar ? `CAR-${cleanTarget}` : `S-${cleanTarget}`, status: 'available' as const };
 
     const activeStoredId = localStorage.getItem('my_active_spot_id') || myActiveSpotIdRef.current;
     const cleanActiveStored = api.normalizeSpotNumber(activeStoredId);
@@ -643,18 +646,15 @@ export default function App() {
           myActiveSpotIdRef.current = null;
           localStorage.removeItem('my_active_spot_id');
 
-          if (isTargetCar) {
-            setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-          } else {
-            setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-          }
+          setCarSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          setMotoSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
 
           setModal(prev => ({ ...prev, isOpen: false }));
           setStartTime(null);
           setSearchQuery("");
 
           try {
-            await api.releaseSpot(id);
+            await api.releaseSpot(standardizedId);
             await Promise.all([fetchSpots(), fetchHistory()]);
           } catch (err: any) {
             console.warn("釋放連線警示:", err);
@@ -691,8 +691,8 @@ export default function App() {
 
       if (isActuallyMyCar) {
         // 🎯 自動校正為愛車並進入離開確認流程
-        myActiveSpotIdRef.current = id;
-        localStorage.setItem('my_active_spot_id', id);
+        myActiveSpotIdRef.current = standardizedId;
+        localStorage.setItem('my_active_spot_id', standardizedId);
         openModal({
           type: 'confirm',
           title: '確認離開',
@@ -701,18 +701,15 @@ export default function App() {
             myActiveSpotIdRef.current = null;
             localStorage.removeItem('my_active_spot_id');
 
-            if (isTargetCar) {
-              setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-            } else {
-              setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-            }
+            setCarSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+            setMotoSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
 
             setModal(prev => ({ ...prev, isOpen: false }));
             setStartTime(null);
             setSearchQuery("");
 
             try {
-              await api.releaseSpot(id);
+              await api.releaseSpot(standardizedId);
               await Promise.all([fetchSpots(), fetchHistory()]);
             } catch (err: any) {
               console.warn("釋放連線警示:", err);
@@ -758,24 +755,24 @@ export default function App() {
         title: '確認停車',
         message: `您要停入車位 ${api.normalizeSpotNumber(spot.number)} 嗎？`,
         showReportBtn: true,
-        spotId: id,
+        spotId: standardizedId,
         onConfirm: async () => {
           const now = new Date();
           const myUserId = user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
 
           wasParkingActiveRef.current = true;
-          myActiveSpotIdRef.current = id;
-          localStorage.setItem('my_active_spot_id', id);
+          myActiveSpotIdRef.current = standardizedId;
+          localStorage.setItem('my_active_spot_id', standardizedId);
 
           // 🎯 樂觀秒更新 React spots State (精確對齊目標車種)
           if (isTargetCar) {
             setVehicleType('car');
             setVehicleMode('car');
-            setCarSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+            setCarSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
           } else {
             setVehicleType('moto');
             setVehicleMode('motorcycle');
-            setMotoSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
+            setMotoSpots(prev => prev.map(s => (s.id === id || s.id === standardizedId || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s));
           }
 
           // 🎯 0.001 秒秒關 Modal、秒啟動計時器、秒切換至狀態頁！
@@ -785,7 +782,7 @@ export default function App() {
           setView('status');
 
           try {
-            await api.reserveSpot(id);
+            await api.reserveSpot(standardizedId);
             await Promise.all([fetchSpots(), fetchHistory()]);
           } catch (e) {
             console.warn('停車同步發送警告:', e);

@@ -332,9 +332,21 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
       const storedActiveId = localStorage.getItem('my_active_spot_id');
       const cleanStoredId = normalizeSpotNumber(storedActiveId);
 
+      // 🎯 讀取本地未結算歷史紀錄作為雙重愛車保險
+      const localHistRaw = localStorage.getItem('smart_parking_history');
+      let histActiveNum: string | null = null;
+      try {
+        if (localHistRaw) {
+          const list = JSON.parse(localHistRaw);
+          if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
+            histActiveNum = normalizeSpotNumber(list[0].spot_number);
+          }
+        }
+      } catch {}
+
       return activeSpots.map((spot: any) => {
         const spotCleanNum = normalizeSpotNumber(spot.number || spot.id);
-        const isMatchesStored = cleanStoredId && spotCleanNum === cleanStoredId;
+        const isMatchesStored = (cleanStoredId && spotCleanNum === cleanStoredId) || (histActiveNum && spotCleanNum === histActiveNum);
         const isMine = (spot.status === 'occupied' || spot.status === 'mine') && (myUserIds.includes(spot.occupied_by) || isMatchesStored);
         return {
           ...spot,
