@@ -361,39 +361,35 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
 }
 
 /**
- * 🎯 超強直連 REST API 更新：Triple-Channel 三重管道無阻礙寫入 (Anon + ServiceRole + SDK)
+ * 🎯 超強直連 REST API 更新：使用標準 ANON_KEY 確保瀏覽器 CORS 100% 暢通直連
  */
-async function rawDirectUpdate(table: string, id: string, updateBody: any) {
-  const cleanNum = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+async function rawDirectUpdate(table: string, spotId: string, updateBody: any) {
+  const cleanNum = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
   const bodyStr = JSON.stringify(updateBody);
 
-  const sendPatch = async (key: string, param: string) => {
-    try {
-      const url = `${SUPABASE_URL}/rest/v1/${table}?${param}`;
-      await fetch(url, {
-        method: 'PATCH',
-        headers: {
-          'apikey': key,
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
-        },
-        body: bodyStr
-      });
-    } catch (e) {
-      console.warn('sendPatch error:', e);
-    }
+  const headers = {
+    'apikey': SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=minimal'
   };
 
-  await Promise.all([
-    sendPatch(SUPABASE_ANON_KEY, `id=eq.${id}`),
-    sendPatch(SUPABASE_ANON_KEY, `id=eq.CAR-ZHUGU-${cleanNum}`),
-    sendPatch(SUPABASE_ANON_KEY, `number=eq.CAR-${cleanNum}`),
-    sendPatch(SUPABASE_ANON_KEY, `number=eq.${cleanNum}`),
-    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `id=eq.${id}`),
-    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `id=eq.CAR-ZHUGU-${cleanNum}`),
-    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `number=eq.CAR-${cleanNum}`)
-  ]);
+  const queries = [
+    `id=eq.${spotId}`,
+    `id=eq.CAR-ZHUGU-${cleanNum}`,
+    `number=eq.CAR-${cleanNum}`,
+    `number=eq.${cleanNum}`
+  ];
+
+  await Promise.allSettled(
+    queries.map(q => 
+      fetch(`${SUPABASE_URL}/rest/v1/${table}?${q}`, {
+        method: 'PATCH',
+        headers,
+        body: bodyStr
+      })
+    )
+  );
 }
 
 export interface SpotActionResult {
