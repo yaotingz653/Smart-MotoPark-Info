@@ -594,7 +594,7 @@ export interface HistoryRecord {
  */
 export async function getHistory(): Promise<HistoryRecord[]> {
   const { data: { session } } = await supabase.auth.getSession();
-  const userId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const userId = session?.user?.id;
 
   let localList: HistoryRecord[] = [];
   try {
@@ -607,44 +607,37 @@ export async function getHistory(): Promise<HistoryRecord[]> {
           if (Array.isArray(parsed)) {
             localList.push(...parsed);
           }
-        } catch {
-          // 忽略格式錯誤
-        }
+        } catch {}
       }
     });
   } catch (e) {
     console.warn(e);
   }
 
-  // 🎯 若本地當前正在停車中，自動補齊頂部即時進行中紀錄
-  try {
-    const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
-    if (activeSpotId) {
-      const activeCleanNum = activeSpotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-      const hasActiveInList = localList.some(h => h.spot_number === activeCleanNum && !h.end_time);
-      if (!hasActiveInList) {
-        localList.unshift({
-          id: `hist-active-${Date.now()}`,
-          user_id: userId,
-          spot_id: activeSpotId,
-          spot_number: activeCleanNum,
-          start_time: new Date().toISOString(),
-          end_time: '',
-          created_at: new Date().toISOString()
-        });
-      }
-    }
-  } catch {
-    // 防呆
+  // 🎯 若本地當前正在停車中，第一時間強制置頂目前進行中的車位！
+  const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+  const activeCleanNum = activeSpotId ? activeSpotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+
+  if (activeSpotId && activeCleanNum) {
+    localList.unshift({
+      id: `hist-live-${activeCleanNum}`,
+      user_id: userId || 'c811008c-077b-4ebc-8db7-2cd18129d584',
+      spot_id: activeSpotId,
+      spot_number: activeCleanNum,
+      start_time: new Date().toISOString(),
+      end_time: '',
+      created_at: new Date().toISOString()
+    });
   }
 
   let dbList: HistoryRecord[] = [];
   try {
-    const url = `https://mlxkzuceamdekinwthyg.supabase.co/rest/v1/parking_history?select=*&order=created_at.desc&limit=50`;
+    const userFilter = userId ? `&user_id=eq.${userId}` : '';
+    const url = `${SUPABASE_URL}/rest/v1/parking_history?select=*${userFilter}&order=created_at.desc&limit=50`;
     const res = await fetch(url, {
       headers: {
-        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c',
-        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c'
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
       }
     });
     const data = await res.json();
@@ -659,12 +652,12 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   const mergedMap = new Map<string, HistoryRecord>();
   localList.forEach(item => {
     if (item && item.spot_number) {
-      mergedMap.set(`${item.spot_number}-${item.start_time || item.created_at}`, item);
+      mergedMap.set(`${item.spot_number.toUpperCase()}-${item.start_time || item.created_at}`, item);
     }
   });
   dbList.forEach(item => {
     if (item && item.spot_number) {
-      const key = `${item.spot_number}-${item.start_time || item.created_at}`;
+      const key = `${item.spot_number.toUpperCase()}-${item.start_time || item.created_at}`;
       if (!mergedMap.has(key)) {
         mergedMap.set(key, item);
       }
@@ -677,18 +670,15 @@ export async function getHistory(): Promise<HistoryRecord[]> {
     return tB - tA;
   });
 
-  // 🎯 智慧清理歷史紀錄：永遠只保留最新 1 筆真正進行中的停車，其餘舊紀錄自動補上結束時間
-  const activeSpotIdFinal = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
-  const activeCleanNumFinal = activeSpotIdFinal ? activeSpotIdFinal.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
-
-  let foundActive = false;
+  // 🎯 智慧清理歷史紀錄：永遠只有當前停車（activeCleanNum）為進行中，其餘舊紀錄自動標註結束時間
+  let hasFoundActive = false;
   const finalizedList = merged.map((item) => {
     const itemNum = (item.spot_number || '').toUpperCase();
-    const isCurrentActive = activeCleanNumFinal && itemNum === activeCleanNumFinal && !foundActive;
+    const isCurrentActive = activeCleanNum && itemNum === activeCleanNum && !hasFoundActive;
 
     if (!item.end_time) {
       if (isCurrentActive) {
-        foundActive = true;
+        hasFoundActive = true;
         return item; // 唯一真實進行中
       } else {
         const sTime = item.start_time || item.created_at || new Date().toISOString();
