@@ -475,7 +475,7 @@ export default function App() {
       ]);
       setSpotsError(null);
 
-      // 🎯 1. 雙載具強制釋放檢查
+      // 🎯 1. 雙載具強制釋放檢查 (僅在非初始載入且處於停車狀態中時觸發彈窗)
       if (myActiveSpotIdRef.current) {
         const activeId = myActiveSpotIdRef.current;
         const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
@@ -490,17 +490,23 @@ export default function App() {
 
         if (targetSpot && targetSpot.status === 'available') {
           const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
+          const wasActive = wasParkingActiveRef.current;
           myActiveSpotIdRef.current = null;
+          wasParkingActiveRef.current = false;
           localStorage.removeItem('my_active_spot_id');
           setStartTime(null);
-          setView('map');
-          setGoogleMapState(prev => ({ ...prev, isOpen: false }));
 
-          openModal({
-            type: 'alert',
-            title: '🛡️ 車位釋放通知',
-            message: `管理員已為您強制釋放車位 ${num}！\n車位已成功歸還為空位，停車計時已為您自動關閉。`
-          });
+          // 只有在本次真實處於停車狀態中且被管理員釋放時才彈窗，重新整理絕不誤觸
+          if (wasActive && !isInitialFetchRef.current) {
+            setView('map');
+            setGoogleMapState(prev => ({ ...prev, isOpen: false }));
+
+            openModal({
+              type: 'alert',
+              title: '🛡️ 車位釋放通知',
+              message: `管理員已為您強制釋放車位 ${num}！\n車位已成功歸還為空位，停車計時已為您自動關閉。`
+            });
+          }
         }
       }
 
@@ -515,6 +521,7 @@ export default function App() {
       const activeMine = allList.find(s => s.status === 'mine');
       if (activeMine) {
         myActiveSpotIdRef.current = activeMine.id;
+        wasParkingActiveRef.current = true;
         localStorage.setItem('my_active_spot_id', activeMine.id);
         if (activeMine.occupied_at) {
           setStartTime(parseSafeDate(activeMine.occupied_at));
@@ -532,21 +539,26 @@ export default function App() {
     }
   }, [openModal]);
 
-  // 🎯 Polling 與 Realtime 完美連動
+  // 🎯 Polling 與 Realtime 完美連動 (使用 ref 保存避免定時器被重複重建)
+  const fetchSpotsRef = useRef(fetchSpots);
+  fetchSpotsRef.current = fetchSpots;
+
   useEffect(() => {
     if (view !== 'login' && view !== 'vehicle-select') {
-      fetchSpots();
-      const timer = setInterval(fetchSpots, 1500);
+      fetchSpotsRef.current();
+      const timer = setInterval(() => {
+        fetchSpotsRef.current();
+      }, 3000);
 
       const channelMoto = api.supabase.channel(`client-realtime-spots-moto`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_spots' }, () => {
-          fetchSpots();
+          fetchSpotsRef.current();
         })
         .subscribe();
 
       const channelCar = api.supabase.channel(`client-realtime-spots-car`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'car_parking_spots' }, () => {
-          fetchSpots();
+          fetchSpotsRef.current();
         })
         .subscribe();
 
@@ -556,7 +568,7 @@ export default function App() {
         api.supabase.removeChannel(channelCar);
       };
     }
-  }, [view, fetchSpots]);
+  }, [view]);
 
   const handleLoginSuccess = async () => {
     // 🎯 0毫秒瞬間同步切換至載具選擇頁面，絕不被任何非同步請求阻擋

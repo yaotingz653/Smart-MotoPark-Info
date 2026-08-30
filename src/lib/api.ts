@@ -659,7 +659,29 @@ export async function getHistory(): Promise<HistoryRecord[]> {
     return tB - tA;
   });
 
-  return merged;
+  // 🎯 智慧清理歷史紀錄：永遠只保留最新 1 筆真正進行中的停車，其餘舊紀錄自動補上結束時間
+  const activeSpotIdFinal = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+  const activeCleanNumFinal = activeSpotIdFinal ? activeSpotIdFinal.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+
+  let foundActive = false;
+  const finalizedList = merged.map((item) => {
+    const itemNum = (item.spot_number || '').toUpperCase();
+    const isCurrentActive = activeCleanNumFinal && itemNum === activeCleanNumFinal && !foundActive;
+
+    if (!item.end_time) {
+      if (isCurrentActive) {
+        foundActive = true;
+        return item; // 唯一真實進行中
+      } else {
+        const sTime = item.start_time || item.created_at || new Date().toISOString();
+        const eTime = new Date(new Date(sTime).getTime() + 15 * 60 * 1000).toISOString();
+        return { ...item, end_time: eTime };
+      }
+    }
+    return item;
+  });
+
+  return finalizedList;
 }
 
 export interface FavoriteSpot {
