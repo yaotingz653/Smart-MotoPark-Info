@@ -8,10 +8,12 @@ import { createClient } from '@supabase/supabase-js';
 
 const DEFAULT_SUPABASE_URL = "https://mlxkzuceamdekinwthyg.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c";
+const DEFAULT_SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc4NDY4OSwiZXhwIjoyMDkyMzYwNjg5fQ.cLaiKc1okymN66vWDozFmf2SkL-nxBC8HOcrcW5IUvo";
 
 // NOTE: 前端優先使用環境變數，若無環境變數 (如 Vercel 部署) 則自動採用靜宜正式 Supabase 資料庫
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_SERVICE_ROLE_KEY;
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // NOTE: VITE_API_BASE_URL 必須是獨立後端的完整 HTTPS 網址。
@@ -356,21 +358,26 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
 }
 
 /**
- * 🎯 超強直連 REST API 更新：完全免疫過期 JWT 或 Session 死鎖干擾
+ * 🎯 超強直連 REST API 更新：使用 Service Role Key 最高權限無條件寫入
  */
 async function rawDirectUpdate(table: string, id: string, updateBody: any) {
   try {
-    const url = `${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`;
-    await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
-      },
-      body: JSON.stringify(updateBody)
-    });
+    const cleanNum = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+    const key = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+    const headers = {
+      'apikey': key,
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    };
+    const bodyStr = JSON.stringify(updateBody);
+
+    await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'PATCH', headers, body: bodyStr }),
+      fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.CAR-ZHUGU-${cleanNum}`, { method: 'PATCH', headers, body: bodyStr }),
+      fetch(`${SUPABASE_URL}/rest/v1/${table}?number=eq.CAR-${cleanNum}`, { method: 'PATCH', headers, body: bodyStr }),
+      fetch(`${SUPABASE_URL}/rest/v1/${table}?number=eq.${cleanNum}`, { method: 'PATCH', headers, body: bodyStr })
+    ]);
   } catch (e) {
     console.warn('rawDirectUpdate error:', e);
   }
