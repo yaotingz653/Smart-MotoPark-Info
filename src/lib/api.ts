@@ -369,95 +369,93 @@ export interface SpotActionResult {
  */
 export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const { data: { session } } = await supabase.auth.getSession();
-  const rawUserId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
-  const userId = isUuid ? rawUserId : 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const rawUserId = session?.user?.id;
+  const isUuid = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
+  // 🎯 確保 occupied_by 絕不違背 PostgreSQL 外鍵約束 (若無登入則傳 null 或合法用戶)
+  const dbUserId = isUuid ? rawUserId : null;
+  const localUserId = rawUserId || 'student-guest';
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
 
   const directNow = new Date().toISOString();
   const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-  const dashFormatted = directSpotNumber.length >= 2 && !directSpotNumber.includes('-') 
-    ? `${directSpotNumber.slice(0, 1)}-${directSpotNumber.slice(1)}` 
-    : directSpotNumber;
+
+  // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，絕不遺漏任何一秒
+  try {
+    const localHistRaw = localStorage.getItem('smart_parking_history');
+    const localHistList: HistoryRecord[] = localHistRaw ? JSON.parse(localHistRaw) : [];
+    const newRecord: HistoryRecord = {
+      id: `hist-${Date.now()}`,
+      user_id: localUserId,
+      spot_id: spotId,
+      spot_number: directSpotNumber,
+      start_time: directNow,
+      end_time: '',
+      created_at: directNow
+    };
+    // 移除未完成的同車位舊紀錄並置頂
+    const filtered = localHistList.filter(h => !(h.spot_number === directSpotNumber && !h.end_time));
+    filtered.unshift(newRecord);
+    localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
+  } catch (e) {
+    console.warn('Local history save error:', e);
+  }
 
   try {
     if (isCar) {
-      // 🎯 採用 100% 最穩固的確切 .eq 更新，相容所有 PostgREST 版本
+      // 🎯 採用 100% 外鍵安全且原生穩固的確切 .eq 更新
       await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
         .eq('id', spotId);
 
       await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
         .eq('id', `CAR-ZHUGU-${directSpotNumber}`);
 
       await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
         .eq('number', `CAR-${directSpotNumber}`);
     } else {
       await supabase.from('parking_spots')
-        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
         .eq('id', spotId);
 
       await supabase.from('parking_spots')
-        .update({ status: 'occupied', occupied_by: userId, occupied_at: directNow })
+        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
         .eq('number', directSpotNumber);
     }
 
-    // 🎯 雙軌歷史持久化：本地 localStorage 100% 確保寫入當前真實時間紀錄
-    try {
-      const localHistRaw = localStorage.getItem('smart_parking_history');
-      const localHistList: HistoryRecord[] = localHistRaw ? JSON.parse(localHistRaw) : [];
-      const newRecord: HistoryRecord = {
-        id: `hist-${Date.now()}`,
-        user_id: userId,
-        spot_id: spotId,
-        spot_number: directSpotNumber,
-        start_time: directNow,
-        end_time: '',
-        created_at: directNow
-      };
-      // 移除未完成的同車位舊紀錄並置頂
-      const filtered = localHistList.filter(h => !(h.spot_number === directSpotNumber && !h.end_time));
-      filtered.unshift(newRecord);
-      localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
-    } catch (e) {
-      console.warn('Local history save error:', e);
-    }
-
-    // 雲端嘗試寫入
-    try {
-      await supabase.from('parking_history').insert({
-        user_id: userId,
-        spot_id: spotId,
-        spot_number: directSpotNumber,
-        action: 'reserve',
-        start_time: directNow
-      });
-    } catch {
-      // 歷史日誌雲端錯誤不影響
+    // 雲端嘗試寫入 (若匿名或 RLS 限制失敗則靜默忽略，本地歷史已保全)
+    if (dbUserId) {
+      try {
+        await supabase.from('parking_history').insert({
+          user_id: dbUserId,
+          spot_id: spotId,
+          spot_number: directSpotNumber,
+          action: 'reserve',
+          start_time: directNow
+        });
+      } catch {
+        // 歷史日誌雲端錯誤不影響
+      }
     }
 
     return {
       success: true,
       message: `Reserved ${directSpotNumber}`,
-      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: userId, occupied_at: directNow }
+      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
     };
   } catch (err: any) {
     console.error('reserveSpot error:', err);
     return {
       success: true,
       message: `Reserved ${directSpotNumber} (Local)`,
-      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: userId, occupied_at: directNow }
+      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
     };
   }
 }
 
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
   const { data: { session } } = await supabase.auth.getSession();
-  const rawUserId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
-  const userId = isUuid ? rawUserId : 'c811008c-077b-4ebc-8db7-2cd18129d584';
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
 
   const directNow = new Date().toISOString();
@@ -503,13 +501,16 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
       console.warn('Local history update error:', e);
     }
 
-    try {
-      await supabase.from('parking_history').update({
-        end_time: directNow,
-        action: 'release'
-      }).eq('user_id', userId).eq('spot_number', directSpotNumber).is('end_time', null);
-    } catch {
-      // 忽略歷史寫入
+    const rawUserId = session?.user?.id;
+    if (rawUserId) {
+      try {
+        await supabase.from('parking_history').update({
+          end_time: directNow,
+          action: 'release'
+        }).eq('user_id', rawUserId).eq('spot_number', directSpotNumber).is('end_time', null);
+      } catch {
+        // 忽略歷史寫入
+      }
     }
 
     return { success: true, message: 'Released parking spot' };
@@ -572,6 +573,28 @@ export async function getHistory(): Promise<HistoryRecord[]> {
     if (raw) localList = JSON.parse(raw);
   } catch (e) {
     console.warn(e);
+  }
+
+  // 🎯 若本地當前正在停車中，自動補齊頂部即時進行中紀錄
+  try {
+    const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+    if (activeSpotId) {
+      const activeCleanNum = activeSpotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+      const hasActiveInList = localList.some(h => h.spot_number === activeCleanNum && !h.end_time);
+      if (!hasActiveInList) {
+        localList.unshift({
+          id: `hist-active-${Date.now()}`,
+          user_id: userId,
+          spot_id: activeSpotId,
+          spot_number: activeCleanNum,
+          start_time: new Date().toISOString(),
+          end_time: '',
+          created_at: new Date().toISOString()
+        });
+      }
+    }
+  } catch {
+    // 防呆
   }
 
   let dbList: HistoryRecord[] = [];
