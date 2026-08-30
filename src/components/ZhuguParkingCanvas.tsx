@@ -91,12 +91,13 @@ export default function ZhuguParkingCanvas({ spots, onSpotClick }: ZhuguParkingC
     return (
       <button
         key={num}
+        onPointerDown={(e) => {
+          // 🎯 阻止事件冒泡到外層拖曳容器，確保點擊 100% 順暢觸發 onClick！
+          e.stopPropagation();
+        }}
         onClick={(e) => {
           e.stopPropagation();
           onSpotClick?.(spot);
-        }}
-        onPointerUp={(e) => {
-          e.stopPropagation();
         }}
         className={`relative flex flex-col items-center justify-center border-2 rounded-xl p-1 transition-all active:scale-95 cursor-pointer font-sans select-none shadow-sm ${bgStyle}`}
         style={{ minWidth: '42px', minHeight: '56px' }}
