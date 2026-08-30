@@ -160,6 +160,7 @@ export default function App() {
     showReportBtn?: boolean;
     spotId?: string;
   }) => {
+    setModalConfirming(false);
     onConfirmRef.current = opts.onConfirm;
     setModal({ isOpen: true, ...opts });
   }, []);
@@ -1123,11 +1124,10 @@ export default function App() {
                             if (onConfirmRef.current) {
                               await onConfirmRef.current();
                             }
-                            setModal(prev => ({ ...prev, isOpen: false }));
                           } catch (err: any) {
                             console.warn("執行確認事件警告:", err);
-                            setModal(prev => ({ ...prev, isOpen: false }));
                           } finally {
+                            setModal(prev => ({ ...prev, isOpen: false }));
                             setModalConfirming(false);
                           }
                         }}

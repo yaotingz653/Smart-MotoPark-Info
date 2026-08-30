@@ -488,13 +488,13 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
     const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
     await rawDirectUpdate(table, spotId, releaseBody);
 
-    // 🎯 雙軌歷史持久化更新離場時間
+    // 🎯 雙軌歷史持久化更新離場時間：將所有未結算記錄（包括當前車位）全部結算為當前離場時間
     try {
       const localHistRaw = localStorage.getItem('smart_parking_history');
       if (localHistRaw) {
         const localHistList: HistoryRecord[] = JSON.parse(localHistRaw);
         const updated = localHistList.map(h => {
-          if ((normalizeSpotNumber(h.spot_number) === directSpotNumber || h.spot_id === spotId) && !h.end_time) {
+          if (!h.end_time || h.end_time === '' || normalizeSpotNumber(h.spot_number) === directSpotNumber) {
             return { ...h, end_time: directNow };
           }
           return h;
