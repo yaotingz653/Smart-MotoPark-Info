@@ -983,28 +983,49 @@ export default function App() {
                   }
                 }}
                 onRelease={(id) => {
-                  const targetReleaseId = id || myActiveSpotIdRef.current || localStorage.getItem('my_active_spot_id') || 'CAR-ZHUGU-G01';
+                  const localHistRaw = typeof window !== 'undefined' ? localStorage.getItem('smart_parking_history') : null;
+                  let latestHistSpotId: string | null = null;
+                  try {
+                    if (localHistRaw) {
+                      const list = JSON.parse(localHistRaw);
+                      if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
+                        latestHistSpotId = list[0].spot_id || `CAR-ZHUGU-${list[0].spot_number}`;
+                      }
+                    }
+                  } catch {}
+
+                  const targetReleaseId = id || myActiveSpotIdRef.current || localStorage.getItem('my_active_spot_id') || latestHistSpotId || 'CAR-ZHUGU-A01';
+                  const cleanTarget = api.normalizeSpotNumber(targetReleaseId);
+
                   openModal({
                     type: 'confirm',
                     title: '確認離開',
-                    message: '您確定要離開目前的車位嗎？車位將變回空位。',
+                    message: `您確定要從車位 ${cleanTarget} 離開嗎？車位將變回空位。`,
                     onConfirm: async () => {
-                      // 🎯 100% 樂觀秒離場：秒關 Modal、秒改車位、秒跳轉地圖、秒清空時間！
+                      // 🎯 1. 雙端 100% 同步清空所有停車鎖與計時器
                       myActiveSpotIdRef.current = null;
                       localStorage.removeItem('my_active_spot_id');
-
-                      setSpots(prev => prev.map(s => (s.id === targetReleaseId || s.number.replace('CAR-', '') === targetReleaseId.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-                      setModal(prev => ({ ...prev, isOpen: false }));
                       setStartTime(null);
                       setSearchQuery("");
+
+                      // 🎯 2. 同步清空 carSpots 與 motoSpots 雙狀態！
+                      setCarSpots(prev => prev.map(s => (s.id === targetReleaseId || api.normalizeSpotNumber(s.number) === cleanTarget || api.normalizeSpotNumber(s.id) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+                      setMotoSpots(prev => prev.map(s => (s.id === targetReleaseId || api.normalizeSpotNumber(s.number) === cleanTarget || api.normalizeSpotNumber(s.id) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+
+                      // 🎯 3. 結算本地歷史紀錄的所有未結算項目
+                      try {
+                        const histRaw = localStorage.getItem('smart_parking_history');
+                        if (histRaw) {
+                          const list = JSON.parse(histRaw);
+                          const nowIso = new Date().toISOString();
+                          const updated = list.map((h: any) => (!h.end_time || h.end_time === '' || api.normalizeSpotNumber(h.spot_number) === cleanTarget) ? { ...h, end_time: nowIso } : h);
+                          localStorage.setItem('smart_parking_history', JSON.stringify(updated));
+                        }
+                      } catch {}
+
                       setView('map');
 
-                      openModal({
-                        type: 'alert',
-                        title: '離場成功通知',
-                        message: '🎉 已成功完成車位離場與結算！感謝您的使用，祝您一路平安！'
-                      });
-
+                      // 🎯 4. 發送 API 釋放資料庫車位
                       try {
                         await api.releaseSpot(targetReleaseId);
                         await Promise.all([fetchSpots(), fetchHistory()]);

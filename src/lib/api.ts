@@ -424,10 +424,12 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const directSpotNumber = normalizeSpotNumber(spotId);
   const table = isCar ? 'car_parking_spots' : 'parking_spots';
 
-  // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，絕不遺漏任何一秒
+  // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，並先結算所有舊紀錄
   try {
     const localHistRaw = localStorage.getItem('smart_parking_history');
     const localHistList: HistoryRecord[] = localHistRaw ? JSON.parse(localHistRaw) : [];
+    // 先把所有舊紀錄加上 end_time 結算
+    const settledOld = localHistList.map(h => (!h.end_time || h.end_time === '') ? { ...h, end_time: directNow } : h);
     const newRecord: HistoryRecord = {
       id: `hist-${Date.now()}`,
       user_id: localUserId,
@@ -437,9 +439,8 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
       end_time: '',
       created_at: directNow
     };
-    const filtered = localHistList.filter(h => !(normalizeSpotNumber(h.spot_number) === directSpotNumber && !h.end_time));
-    filtered.unshift(newRecord);
-    localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
+    settledOld.unshift(newRecord);
+    localStorage.setItem('smart_parking_history', JSON.stringify(settledOld.slice(0, 30)));
   } catch (e) {
     console.warn('Local history save error:', e);
   }
@@ -479,14 +480,16 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 }
 
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
-  const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
   const directNow = new Date().toISOString();
   const directSpotNumber = normalizeSpotNumber(spotId);
-  const table = isCar ? 'car_parking_spots' : 'parking_spots';
 
   try {
     const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
-    await rawDirectUpdate(table, spotId, releaseBody);
+    // 🎯 雙表全釋放保險：同時對 car_parking_spots 與 parking_spots 發送釋放
+    await Promise.allSettled([
+      rawDirectUpdate('car_parking_spots', spotId, releaseBody),
+      rawDirectUpdate('parking_spots', spotId, releaseBody)
+    ]);
 
     // 🎯 雙軌歷史持久化更新離場時間：將所有未結算記錄（包括當前車位）全部結算為當前離場時間
     try {
