@@ -325,11 +325,11 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
       const myUserIds = [userId, fallbackUserId, 'guest'].filter(Boolean);
 
       const storedActiveId = localStorage.getItem('my_active_spot_id');
-      const cleanStoredId = storedActiveId ? storedActiveId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '') : null;
+      const cleanStoredId = storedActiveId ? storedActiveId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
 
       return activeSpots.map((spot: any) => {
-        const spotCleanNum = (spot.number || spot.id).replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-        const isMatchesStored = cleanStoredId && spotCleanNum === cleanStoredId;
+        const spotCleanNum = (spot.number || spot.id).replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase();
+        const isMatchesStored = cleanStoredId && (spotCleanNum === cleanStoredId || spot.id.toUpperCase() === storedActiveId?.toUpperCase());
         const isMine = (spot.status === 'occupied' || spot.status === 'mine') && (myUserIds.includes(spot.occupied_by) || isMatchesStored);
         return {
           ...spot,

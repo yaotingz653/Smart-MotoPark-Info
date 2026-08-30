@@ -605,34 +605,16 @@ export default function App() {
       s.id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '') === cleanTarget ||
       s.number.replace('CAR-', '').replace('S-', '') === cleanTarget
     );
-    if (!spot) return;
-
-    // 車位已停用 → 無法操作
-    if (spot.status === 'disabled') {
-      openModal({
-        type: 'alert',
-        title: '車位已停用',
-        message: '此車位目前已由管理員停用，無法停車。'
-      });
-      return;
-    }
-
-    // 車位已被他人佔用 → 無法操作
-    if (spot.status === 'occupied') {
-      openModal({
-        type: 'alert',
-        title: '車位佔用中',
-        message: '此車位已被他人佔用中，請選擇其他綠色空位。'
-      });
-      return;
-    }
+    const activeStoredId = localStorage.getItem('my_active_spot_id') || myActiveSpotIdRef.current;
+    const cleanActiveStored = activeStoredId ? activeStoredId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+    const isThisMySpot = spot.status === 'mine' || (cleanActiveStored && cleanTarget.toUpperCase() === cleanActiveStored);
 
     // 這是我的車位 → 離開（車位變回空位）
-    if (spot.status === 'mine') {
+    if (isThisMySpot) {
       openModal({
         type: 'confirm',
         title: '確認離開',
-        message: `您確定要從車位 ${spot.number} 離開嗎？車位將變回空位。`,
+        message: `您確定要從車位 ${spot.number.replace('CAR-', '')} 離開嗎？車位將變回空位。`,
         onConfirm: async () => {
           // 🎯 100% 樂觀瞬間秒釋放車位與清空計時器
           myActiveSpotIdRef.current = null;
@@ -659,6 +641,26 @@ export default function App() {
             }
           })();
         }
+      });
+      return;
+    }
+
+    // 車位已停用 → 無法操作
+    if (spot.status === 'disabled') {
+      openModal({
+        type: 'alert',
+        title: '車位已停用',
+        message: '此車位目前已由管理員停用，無法停車。'
+      });
+      return;
+    }
+
+    // 車位已被他人佔用 → 無法操作
+    if (spot.status === 'occupied') {
+      openModal({
+        type: 'alert',
+        title: '車位佔用中',
+        message: '此車位已被他人佔用中，請選擇其他綠色空位。'
       });
       return;
     }

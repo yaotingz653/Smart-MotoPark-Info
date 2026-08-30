@@ -63,12 +63,21 @@ export default function ZhuguParkingCanvas({ spots, onSpotClick }: ZhuguParkingC
   // 取得車位即時狀態
   const getSpotStatus = (num: string) => {
     const cleanNum = num.toUpperCase();
+    const activeStoredId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+    const cleanActiveStored = activeStoredId ? activeStoredId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+
     const spot = spots.find(s => {
-      const sNum = s.number.toUpperCase().replace('CAR-', '');
-      const sId = s.id.toUpperCase().replace('CAR-ZHUGU-', '').replace('CAR-', '');
+      const sNum = s.number.toUpperCase().replace('CAR-', '').replace('S-', '');
+      const sId = s.id.toUpperCase().replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
       return sNum === cleanNum || sId === cleanNum;
     });
-    return spot || { id: `CAR-ZHUGU-${num}`, number: `CAR-${num}`, status: 'available' as const, parkingBlockId: 'zhugu' };
+
+    if (spot) {
+      const isMine = spot.status === 'mine' || (cleanActiveStored && cleanNum === cleanActiveStored);
+      return isMine ? { ...spot, status: 'mine' as const } : spot;
+    }
+    const isMine = cleanActiveStored && cleanNum === cleanActiveStored;
+    return { id: `CAR-ZHUGU-${num}`, number: `CAR-${num}`, status: (isMine ? 'mine' : 'available') as any, parkingBlockId: 'zhugu' };
   };
 
   // 渲染單個車位方塊
