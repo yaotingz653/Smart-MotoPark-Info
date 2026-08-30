@@ -644,13 +644,14 @@ export default function App() {
           });
 
           // 背景異步連線 Supabase 釋放
-          try {
-            api.releaseSpot(id).catch(e => console.warn('背景釋放:', e));
-            fetchSpots();
-            fetchHistory();
-          } catch (err: any) {
-            console.warn("背景釋放警示:", err);
-          }
+          (async () => {
+            try {
+              await api.releaseSpot(id);
+              await Promise.all([fetchSpots(), fetchHistory()]);
+            } catch (err: any) {
+              console.warn("背景釋放警示:", err);
+            }
+          })();
         }
       });
       return;
@@ -704,14 +705,15 @@ export default function App() {
           markEntryNoticeCompleted();
           setView('status');
 
-          // 背景異步寫入雲端 Supabase 與刷新，絕不上網阻塞 UI
-          try {
-            api.reserveSpot(id).catch(e => console.warn('背景預約警告:', e));
-            fetchSpots();
-            fetchHistory();
-          } catch (e) {
-            console.warn('背景同步發送警告:', e);
-          }
+          // 背景嚴格循序寫入雲端 Supabase 並在寫入完成後刷新
+          (async () => {
+            try {
+              await api.reserveSpot(id);
+              await Promise.all([fetchSpots(), fetchHistory()]);
+            } catch (e) {
+              console.warn('背景同步發送警告:', e);
+            }
+          })();
         }
       });
     }
@@ -927,9 +929,14 @@ export default function App() {
                       });
 
                       const cleanId = id || myActiveSpotIdRef.current || 'CAR-ZHUGU-A01';
-                      api.releaseSpot(cleanId).catch(e => console.warn("背景釋放連線:", e));
-                      fetchHistory();
-                      fetchSpots();
+                      (async () => {
+                        try {
+                          await api.releaseSpot(cleanId);
+                          await Promise.all([fetchSpots(), fetchHistory()]);
+                        } catch (e) {
+                          console.warn("背景釋放連線:", e);
+                        }
+                      })();
                     }
                   });
                 }}
