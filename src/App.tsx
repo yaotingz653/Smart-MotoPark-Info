@@ -1492,6 +1492,13 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
   const [selectedParkingLot, setSelectedParkingLot] = useState<string | null>(null);
 
   const getLotRemainingSpots = useCallback((lotName: string) => {
+    if (lotName === "主顧樓地下停車場" || lotName === "第 4 停車場" || lotName.includes("主顧") || lotName.includes("地下")) {
+      const zhuguAvailable = spots.filter(s => 
+        (s.id.startsWith("CAR-ZHUGU-") || s.parkingBlockId === 'zhugu' || s.id.startsWith("CAR-")) && 
+        s.status === 'available'
+      ).length;
+      return zhuguAvailable;
+    }
     if (lotName === "第 6 停車場") {
       return spots.filter(s => (s.id.startsWith("CAR-5") || s.id.startsWith("CAR-6") || s.id.startsWith("CAR-7")) && s.status === 'available').length;
     }
@@ -1502,13 +1509,16 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
       if (lotName === "第 1 停車場") return rowIdx === 0 && s.status === 'available';
       if (lotName === "第 2 停車場") return rowIdx === 1 && s.status === 'available';
       if (lotName === "第 3 停車場") return rowIdx === 2 && s.status === 'available';
-      if (lotName === "第 4 停車場" || lotName === "主顧樓地下停車場") return rowIdx === 3 && s.status === 'available';
       if (lotName === "第 5 停車場") return rowIdx === 4 && s.status === 'available';
       return false;
     }).length;
   }, [spots]);
 
   const getLotTotalSpots = (lotName: string) => {
+    if (lotName === "主顧樓地下停車場" || lotName === "第 4 停車場" || lotName.includes("主顧") || lotName.includes("地下")) {
+      const zhuguTotal = spots.filter(s => s.id.startsWith("CAR-ZHUGU-") || s.parkingBlockId === 'zhugu' || s.id.startsWith("CAR-")).length;
+      return zhuguTotal || 96;
+    }
     if (lotName === "第 6 停車場") return 24;
     return 8;
   };
