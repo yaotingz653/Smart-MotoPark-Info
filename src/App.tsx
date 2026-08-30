@@ -711,15 +711,12 @@ export default function App() {
           markEntryNoticeCompleted();
           setView('status');
 
-          // 背景嚴格循序寫入雲端 Supabase 並在寫入完成後刷新
-          (async () => {
-            try {
-              await api.reserveSpot(id);
-              await Promise.all([fetchSpots(), fetchHistory()]);
-            } catch (e) {
-              console.warn('背景同步發送警告:', e);
-            }
-          })();
+          try {
+            await api.reserveSpot(id);
+            await Promise.all([fetchSpots(), fetchHistory()]);
+          } catch (e) {
+            console.warn('停車同步發送警告:', e);
+          }
         }
       });
     }
