@@ -617,13 +617,25 @@ export default function App() {
 
     // 車位空位 → 停車佔位 (0毫秒極速秒彈「確認停車」，絕不上網等待網路!)
     if (spot.status === 'available') {
+      // 🎯 智慧檢查：若本機有記錄停車，但雲端該車位實際上已是空位，自動解除舊鎖
       if (myActiveSpotIdRef.current) {
-        openModal({
-          type: 'alert',
-          title: '已停放其他車位',
-          message: '您目前已有停放中的車位！系統限制一次只能預約一個車位，請先釋放原車位後再預約新車位。'
-        });
-        return;
+        const currentlyOccupied = spots.find(s => 
+          (s.id === myActiveSpotIdRef.current || s.number === myActiveSpotIdRef.current) && 
+          (s.status === 'mine' || s.status === 'occupied')
+        );
+
+        if (!currentlyOccupied) {
+          // 舊車位已釋放，自動清除殘留鎖
+          myActiveSpotIdRef.current = null;
+          localStorage.removeItem('my_active_spot_id');
+        } else {
+          openModal({
+            type: 'alert',
+            title: '已停放其他車位',
+            message: `您目前已在車位 ${currentlyOccupied.number.replace('CAR-', '').replace('S-', '')} 停放中！若要更換車位，請先至停車狀態頁釋放原車位。`
+          });
+          return;
+        }
       }
 
       openModal({
