@@ -579,8 +579,20 @@ export async function getHistory(): Promise<HistoryRecord[]> {
 
   let localList: HistoryRecord[] = [];
   try {
-    const raw = localStorage.getItem('smart_parking_history');
-    if (raw) localList = JSON.parse(raw);
+    const keys = ['smart_parking_history', 'parking_history', 'user_parking_history'];
+    keys.forEach(k => {
+      const raw = localStorage.getItem(k);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            localList.push(...parsed);
+          }
+        } catch {
+          // 忽略格式錯誤
+        }
+      }
+    });
   } catch (e) {
     console.warn(e);
   }
@@ -609,23 +621,17 @@ export async function getHistory(): Promise<HistoryRecord[]> {
 
   let dbList: HistoryRecord[] = [];
   try {
-    let { data, error } = await supabase
-      .from('parking_history')
-      .select('*')
-      .or(`user_id.eq.${userId},user_id.eq.c811008c-077b-4ebc-8db7-2cd18129d584`)
-      .order('created_at', { ascending: false });
-
-    if (error || !data || data.length === 0) {
-      const { data: allData } = await supabase
-        .from('parking_history')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (allData && allData.length > 0) {
-        data = allData;
+    const url = `https://mlxkzuceamdekinwthyg.supabase.co/rest/v1/parking_history?select=*&order=created_at.desc&limit=50`;
+    const res = await fetch(url, {
+      headers: {
+        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c',
+        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c'
       }
+    });
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      dbList = data as HistoryRecord[];
     }
-    if (data) dbList = data as HistoryRecord[];
   } catch (e) {
     console.warn(e);
   }
@@ -633,18 +639,22 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   // 合併去重並按時間倒序排序
   const mergedMap = new Map<string, HistoryRecord>();
   localList.forEach(item => {
-    mergedMap.set(`${item.spot_number}-${item.start_time}`, item);
+    if (item && item.spot_number) {
+      mergedMap.set(`${item.spot_number}-${item.start_time || item.created_at}`, item);
+    }
   });
   dbList.forEach(item => {
-    const key = `${item.spot_number}-${item.start_time}`;
-    if (!mergedMap.has(key)) {
-      mergedMap.set(key, item);
+    if (item && item.spot_number) {
+      const key = `${item.spot_number}-${item.start_time || item.created_at}`;
+      if (!mergedMap.has(key)) {
+        mergedMap.set(key, item);
+      }
     }
   });
 
   const merged = Array.from(mergedMap.values()).sort((a, b) => {
-    const tA = new Date(a.start_time || a.created_at).getTime();
-    const tB = new Date(b.start_time || b.created_at).getTime();
+    const tA = new Date(a.start_time || a.created_at || 0).getTime();
+    const tB = new Date(b.start_time || b.created_at || 0).getTime();
     return tB - tA;
   });
 

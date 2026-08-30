@@ -399,11 +399,11 @@ export default function App() {
 
         const finalTimeDisplay = (start && end)
           ? `${formattedDate} (${start} - ${end})`
-          : formattedDate;
+          : (!end && start) ? `${formattedDate} (${start} - 進行中)` : formattedDate;
 
         return {
           id: h.id,
-          number: h.spot_number, // 車位名稱
+          number: h.spot_number.replace('CAR-', '').replace('S-', ''), // 車位名稱 (如 B01, A01)
           time: finalTimeDisplay // 格式化後的時間
         };
       });
