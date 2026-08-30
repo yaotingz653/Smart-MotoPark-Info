@@ -924,6 +924,7 @@ export default function App() {
                   }
                 }}
                 onRelease={(id) => {
+                  const targetReleaseId = id || myActiveSpotIdRef.current || localStorage.getItem('my_active_spot_id') || 'CAR-ZHUGU-G01';
                   openModal({
                     type: 'confirm',
                     title: '確認離開',
@@ -933,7 +934,7 @@ export default function App() {
                       myActiveSpotIdRef.current = null;
                       localStorage.removeItem('my_active_spot_id');
 
-                      setSpots(prev => prev.map(s => (s.id === id || s.number.replace('CAR-', '') === id.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+                      setSpots(prev => prev.map(s => (s.id === targetReleaseId || s.number.replace('CAR-', '') === targetReleaseId.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
                       setModal(prev => ({ ...prev, isOpen: false }));
                       setStartTime(null);
                       setSearchQuery("");
@@ -945,15 +946,12 @@ export default function App() {
                         message: '🎉 已成功完成車位離場與結算！感謝您的使用，祝您一路平安！'
                       });
 
-                      const cleanId = id || myActiveSpotIdRef.current || 'CAR-ZHUGU-A01';
-                      (async () => {
-                        try {
-                          await api.releaseSpot(cleanId);
-                          await Promise.all([fetchSpots(), fetchHistory()]);
-                        } catch (e) {
-                          console.warn("背景釋放連線:", e);
-                        }
-                      })();
+                      try {
+                        await api.releaseSpot(targetReleaseId);
+                        await Promise.all([fetchSpots(), fetchHistory()]);
+                      } catch (e) {
+                        console.warn("釋放連線警告:", e);
+                      }
                     }
                   });
                 }}
