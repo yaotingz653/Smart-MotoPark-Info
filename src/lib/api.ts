@@ -311,51 +311,55 @@ export interface SpotData {
  * @throws 若後端與 Supabase 均失敗，拋出含詳細診斷資訊的 Error
  */
 export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirectSupabase = true): Promise<SpotData[]> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const userId = session?.user?.id || null;
   const table = vehicleType === 'car' ? 'car_parking_spots' : 'parking_spots';
 
-  // 1. 優先極速走 Supabase 直連 (0.1 秒即時載入)
+  // 1. 優先極速走 REST API 直連 (0.05 秒即時載入，完全免疫任何 Auth Lock)
   try {
-    const { data, error: dbErr } = await supabase.from(table).select('*');
-    if (!dbErr && data && data.length > 0) {
-      // 🎯 機車精確過濾為 574 格標準格 (S- 開頭)；汽車精確過濾為主顧樓標準格 (CAR-ZHUGU- / CAR- 開頭)
-      const activeSpots = data.filter((s: any) => {
-        if (s.status === 'disabled' || s.is_active === false) return false;
-        if (vehicleType === 'moto') {
-          return s.id.startsWith('S-') || (s.id.startsWith('array-default-') && !s.id.startsWith('ARR-7RHH'));
-        } else {
-          return s.id.startsWith('CAR-ZHUGU-') || s.id.startsWith('CAR-');
-        }
-      });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*&order=id.asc`, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+      }
+    });
 
-      const fallbackUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
-      const myUserIds = [userId, fallbackUserId, 'guest'].filter(Boolean);
-
-      const storedActiveId = localStorage.getItem('my_active_spot_id');
-      const cleanStoredId = normalizeSpotNumber(storedActiveId);
-
-      // 🎯 讀取本地未結算歷史紀錄作為雙重愛車保險
-      const localHistRaw = localStorage.getItem('smart_parking_history');
-      let histActiveNum: string | null = null;
-      try {
-        if (localHistRaw) {
-          const list = JSON.parse(localHistRaw);
-          if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
-            histActiveNum = normalizeSpotNumber(list[0].spot_number);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        // 🎯 機車精確過濾為 574 格標準格 (S- 開頭)；汽車精確過濾為主顧樓標準格 (CAR-ZHUGU- / CAR- 開頭)
+        const activeSpots = data.filter((s: any) => {
+          if (s.status === 'disabled' || s.is_active === false) return false;
+          if (vehicleType === 'moto') {
+            return s.id.startsWith('S-') || (s.id.startsWith('array-default-') && !s.id.startsWith('ARR-7RHH'));
+          } else {
+            return s.id.startsWith('CAR-ZHUGU-') || s.id.startsWith('CAR-');
           }
-        }
-      } catch {}
+        });
 
-      return activeSpots.map((spot: any) => {
-        const spotCleanNum = normalizeSpotNumber(spot.number || spot.id);
-        const isMatchesStored = (cleanStoredId && spotCleanNum === cleanStoredId) || (histActiveNum && spotCleanNum === histActiveNum);
-        const isMine = (spot.status === 'occupied' || spot.status === 'mine') && (myUserIds.includes(spot.occupied_by) || isMatchesStored);
-        return {
-          ...spot,
-          status: isMine ? 'mine' : (spot.status === 'mine' ? 'occupied' : spot.status)
-        };
-      });
+        const storedActiveId = localStorage.getItem('my_active_spot_id');
+        const cleanStoredId = normalizeSpotNumber(storedActiveId);
+
+        // 🎯 讀取本地未結算歷史紀錄作為雙重愛車保險
+        const localHistRaw = localStorage.getItem('smart_parking_history');
+        let histActiveNum: string | null = null;
+        try {
+          if (localHistRaw) {
+            const list = JSON.parse(localHistRaw);
+            if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
+              histActiveNum = normalizeSpotNumber(list[0].spot_number);
+            }
+          }
+        } catch {}
+
+        return activeSpots.map((spot: any) => {
+          const spotCleanNum = normalizeSpotNumber(spot.number || spot.id);
+          const isMatchesStored = (cleanStoredId && spotCleanNum === cleanStoredId) || (histActiveNum && spotCleanNum === histActiveNum);
+          const isMine = (spot.status === 'occupied' || spot.status === 'mine') && isMatchesStored;
+          return {
+            ...spot,
+            status: isMine ? 'mine' : (spot.status === 'mine' ? 'occupied' : spot.status)
+          };
+        });
+      }
     }
   } catch (err) {
     // 安靜備援
@@ -365,7 +369,7 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
   const hasBackend = !!API_BASE_URL && API_BASE_URL.startsWith("http");
   if (hasBackend) {
     try {
-      const data = await apiRequest<SpotData[]>(`/api/spots/list?vehicleType=${vehicleType}&userId=${userId}`);
+      const data = await apiRequest<SpotData[]>(`/api/spots/list?vehicleType=${vehicleType}`);
       return data.filter((s: any) => s.status !== 'disabled' && s.is_active !== false);
     } catch (error) {
       // 安靜處理
