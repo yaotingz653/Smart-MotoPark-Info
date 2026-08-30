@@ -366,11 +366,16 @@ export interface SpotActionResult {
  */
 export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const { data: { session } } = await supabase.auth.getSession();
-  const userId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const rawUserId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
+  const userId = isUuid ? rawUserId : 'c811008c-077b-4ebc-8db7-2cd18129d584';
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
 
   const directNow = new Date().toISOString();
   const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const dashFormatted = directSpotNumber.length >= 2 && !directSpotNumber.includes('-') 
+    ? `${directSpotNumber.slice(0, 1)}-${directSpotNumber.slice(1)}` 
+    : directSpotNumber;
 
   try {
     if (isCar) {
@@ -378,12 +383,15 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
       await Promise.all([
         supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', directSpotNumber),
         supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `CAR-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `CAR-${dashFormatted}`),
         supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', spotId),
-        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `CAR-ZHUGU-${directSpotNumber}`)
+        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `CAR-ZHUGU-${dashFormatted}`)
       ]);
     } else {
       await Promise.all([
         supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', directSpotNumber),
+        supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('number', `S-${directSpotNumber}`),
         supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', spotId),
         supabase.from('parking_spots').update({ status: 'occupied', occupied_by: userId, occupied_at: directNow }).eq('id', `S-${directSpotNumber}`)
       ]);
@@ -419,23 +427,31 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
   const { data: { session } } = await supabase.auth.getSession();
-  const userId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const rawUserId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
+  const userId = isUuid ? rawUserId : 'c811008c-077b-4ebc-8db7-2cd18129d584';
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
 
   const directNow = new Date().toISOString();
   const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const dashFormatted = directSpotNumber.length >= 2 && !directSpotNumber.includes('-') 
+    ? `${directSpotNumber.slice(0, 1)}-${directSpotNumber.slice(1)}` 
+    : directSpotNumber;
 
   try {
     if (isCar) {
       await Promise.all([
         supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', directSpotNumber),
         supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `CAR-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `CAR-${dashFormatted}`),
         supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', spotId),
-        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `CAR-ZHUGU-${directSpotNumber}`)
+        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `CAR-ZHUGU-${dashFormatted}`)
       ]);
     } else {
       await Promise.all([
         supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', directSpotNumber),
+        supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('number', `S-${directSpotNumber}`),
         supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', spotId),
         supabase.from('parking_spots').update({ status: 'available', occupied_by: null, occupied_at: null }).eq('id', `S-${directSpotNumber}`)
       ]);
