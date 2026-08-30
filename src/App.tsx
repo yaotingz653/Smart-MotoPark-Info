@@ -1544,31 +1544,6 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
     if (!isCar || sortedLots.length === 0) return null;
     const firstLot = sortedLots[0];
     
-    if (firstLot.remaining >= 3) {
-      return {
-        recommendedLot: firstLot.name,
-        distance: firstLot.dist,
-        remaining: firstLot.remaining,
-        total: firstLot.total,
-        relation: firstLot.relation,
-        isBackup: false,
-        firstLotName: firstLot.name
-      };
-    }
-    
-    const backupLot = sortedLots.find(l => l.remaining >= 3);
-    if (backupLot) {
-      return {
-        recommendedLot: backupLot.name,
-        distance: backupLot.dist,
-        remaining: backupLot.remaining,
-        total: backupLot.total,
-        relation: backupLot.relation,
-        isBackup: true,
-        firstLotName: firstLot.name
-      };
-    }
-    
     return {
       recommendedLot: firstLot.name,
       distance: firstLot.dist,
@@ -2002,7 +1977,7 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid ${recommendationInfo.recommendedLot.includes('主顧') ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
                 <button
                   onClick={() => {
                     if (onOpenMap) {
@@ -2017,17 +1992,19 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
                   className="py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black rounded-2xl flex items-center justify-center gap-1.5 shadow-md shadow-blue-100 transition-all active:scale-95"
                 >
                   <Compass size={14} />
-                  <span>開始導航</span>
+                  <span>開始導航至 {recommendationInfo.recommendedLot}</span>
                 </button>
-                <button
-                  onClick={() => {
-                    setSelectedParkingLot(recommendationInfo.recommendedLot);
-                  }}
-                  className="py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 text-xs font-black rounded-2xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-50 transition-all active:scale-95"
-                >
-                  <MapIcon size={14} />
-                  <span>預約此場車位</span>
-                </button>
+                {recommendationInfo.recommendedLot.includes('主顧') && (
+                  <button
+                    onClick={() => {
+                      setSelectedParkingLot(recommendationInfo.recommendedLot);
+                    }}
+                    className="py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 text-xs font-black rounded-2xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-50 transition-all active:scale-95"
+                  >
+                    <MapIcon size={14} />
+                    <span>進入 2D 平面預約</span>
+                  </button>
+                )}
               </div>
             </motion.div>
           )}
