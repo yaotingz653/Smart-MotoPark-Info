@@ -161,17 +161,19 @@ export default function GoogleMapContainer({
             className="w-full h-full rounded-2xl"
           ></iframe>
 
-          {/* 底部開啟外部原生地圖按鈕 */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[10000]">
-            <button
-              onClick={openExternalGoogleMaps}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black shadow-xl flex items-center gap-2 transition-all active:scale-95 border border-blue-400/30 cursor-pointer"
-            >
-              <Compass size={15} />
-              <span>開啟 Google 地圖全功能導航</span>
-              <ExternalLink size={13} />
-            </button>
-          </div>
+          {/* 底部開啟外部原生地圖按鈕 (僅在全螢幕導航彈窗時顯示，避免與首頁卡片重複) */}
+          {!inline && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[10000]">
+              <button
+                onClick={openExternalGoogleMaps}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black shadow-xl flex items-center gap-2 transition-all active:scale-95 border border-blue-400/30 cursor-pointer"
+              >
+                <Compass size={15} />
+                <span>開啟 Google 地圖全功能導航</span>
+                <ExternalLink size={13} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
