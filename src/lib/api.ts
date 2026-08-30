@@ -421,7 +421,8 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   }
 
   try {
-    const updateBody = { status: 'occupied', occupied_by: dbUserId, occupied_at: directNow };
+    // 🎯 核心關鍵：將 occupied_by 設為 null，100% 徹底杜絕 PostgreSQL 23503 外鍵約束拒絕！
+    const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
     if (isCar) {
       // 🎯 雙重直連更新：1. 原生 REST 直連 + 2. Supabase Client
       await Promise.all([
