@@ -6,9 +6,12 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// NOTE: 前端僅使用 VITE_SUPABASE_ANON_KEY，不暴露 Service Role Key
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? "";
+const DEFAULT_SUPABASE_URL = "https://mlxkzuceamdekinwthyg.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c";
+
+// NOTE: 前端優先使用環境變數，若無環境變數 (如 Vercel 部署) 則自動採用靜宜正式 Supabase 資料庫
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // NOTE: VITE_API_BASE_URL 必須是獨立後端的完整 HTTPS 網址。
@@ -29,7 +32,7 @@ if (typeof window !== 'undefined') {
   }
 }
 
-export const supabase = createClient(SUPABASE_URL || "https://dummy.supabase.co", SUPABASE_ANON_KEY || "dummy", {
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
