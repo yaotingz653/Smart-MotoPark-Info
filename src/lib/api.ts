@@ -358,29 +358,39 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
 }
 
 /**
- * 🎯 超強直連 REST API 更新：使用 Service Role Key 最高權限無條件寫入
+ * 🎯 超強直連 REST API 更新：Triple-Channel 三重管道無阻礙寫入 (Anon + ServiceRole + SDK)
  */
 async function rawDirectUpdate(table: string, id: string, updateBody: any) {
-  try {
-    const cleanNum = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-    const key = SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
-    const headers = {
-      'apikey': key,
-      'Authorization': `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    };
-    const bodyStr = JSON.stringify(updateBody);
+  const cleanNum = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const bodyStr = JSON.stringify(updateBody);
 
-    await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: 'PATCH', headers, body: bodyStr }),
-      fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.CAR-ZHUGU-${cleanNum}`, { method: 'PATCH', headers, body: bodyStr }),
-      fetch(`${SUPABASE_URL}/rest/v1/${table}?number=eq.CAR-${cleanNum}`, { method: 'PATCH', headers, body: bodyStr }),
-      fetch(`${SUPABASE_URL}/rest/v1/${table}?number=eq.${cleanNum}`, { method: 'PATCH', headers, body: bodyStr })
-    ]);
-  } catch (e) {
-    console.warn('rawDirectUpdate error:', e);
-  }
+  const sendPatch = async (key: string, param: string) => {
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/${table}?${param}`;
+      await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'apikey': key,
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: bodyStr
+      });
+    } catch (e) {
+      console.warn('sendPatch error:', e);
+    }
+  };
+
+  await Promise.all([
+    sendPatch(SUPABASE_ANON_KEY, `id=eq.${id}`),
+    sendPatch(SUPABASE_ANON_KEY, `id=eq.CAR-ZHUGU-${cleanNum}`),
+    sendPatch(SUPABASE_ANON_KEY, `number=eq.CAR-${cleanNum}`),
+    sendPatch(SUPABASE_ANON_KEY, `number=eq.${cleanNum}`),
+    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `id=eq.${id}`),
+    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `id=eq.CAR-ZHUGU-${cleanNum}`),
+    sendPatch(SUPABASE_SERVICE_ROLE_KEY, `number=eq.CAR-${cleanNum}`)
+  ]);
 }
 
 export interface SpotActionResult {
@@ -398,7 +408,6 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const { data: { session } } = await supabase.auth.getSession();
   const rawUserId = session?.user?.id;
   const isUuid = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawUserId);
-  // 🎯 確保 occupied_by 絕不違背 PostgreSQL 外鍵約束 (若無登入則傳 null 或合法用戶)
   const dbUserId = isUuid ? rawUserId : null;
   const localUserId = rawUserId || 'student-guest';
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
@@ -428,15 +437,15 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   }
 
   try {
-    // 🎯 核心關鍵：將 occupied_by 設為 null，100% 徹底杜絕 PostgreSQL 23503 外鍵約束拒絕！
     const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
     if (isCar) {
-      // 🎯 雙重直連更新：1. 原生 REST 直連 + 2. Supabase Client
       await Promise.all([
         rawDirectUpdate('car_parking_spots', spotId, updateBody),
         rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, updateBody),
         rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, updateBody),
-        supabase.from('car_parking_spots').update(updateBody).eq('id', spotId)
+        supabase.from('car_parking_spots').update(updateBody).eq('id', spotId),
+        supabase.from('car_parking_spots').update(updateBody).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update(updateBody).eq('number', `CAR-${directSpotNumber}`)
       ]);
     } else {
       await Promise.all([
@@ -491,7 +500,9 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
         rawDirectUpdate('car_parking_spots', spotId, releaseBody),
         rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, releaseBody),
         rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, releaseBody),
-        supabase.from('car_parking_spots').update(releaseBody).eq('id', spotId)
+        supabase.from('car_parking_spots').update(releaseBody).eq('id', spotId),
+        supabase.from('car_parking_spots').update(releaseBody).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
+        supabase.from('car_parking_spots').update(releaseBody).eq('number', `CAR-${directSpotNumber}`)
       ]);
     } else {
       await Promise.all([
