@@ -431,8 +431,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
       end_time: '',
       created_at: directNow
     };
-    // 移除未完成的同車位舊紀錄並置頂
-    const filtered = localHistList.filter(h => !(h.spot_number === directSpotNumber && !h.end_time));
+    const filtered = localHistList.filter(h => !(h.spot_number.toUpperCase() === directSpotNumber.toUpperCase() && !h.end_time));
     filtered.unshift(newRecord);
     localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
   } catch (e) {
@@ -443,19 +442,13 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
     const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
     if (isCar) {
       await Promise.all([
-        rawDirectUpdate('car_parking_spots', spotId, updateBody),
-        rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, updateBody),
-        rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, updateBody),
-        supabase.from('car_parking_spots').update(updateBody).eq('id', spotId),
-        supabase.from('car_parking_spots').update(updateBody).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update(updateBody).eq('number', `CAR-${directSpotNumber}`)
+        supabase.from('car_parking_spots').update(updateBody).or(`id.eq.${spotId},id.eq.CAR-ZHUGU-${directSpotNumber},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber}`),
+        rawDirectUpdate('car_parking_spots', spotId, updateBody)
       ]);
     } else {
       await Promise.all([
-        rawDirectUpdate('parking_spots', spotId, updateBody),
-        rawDirectUpdate('parking_spots', directSpotNumber, updateBody),
-        rawDirectUpdate('parking_spots', `S-${directSpotNumber}`, updateBody),
-        supabase.from('parking_spots').update(updateBody).eq('id', spotId)
+        supabase.from('parking_spots').update(updateBody).or(`id.eq.${spotId},id.eq.S-${directSpotNumber},number.eq.${directSpotNumber}`),
+        rawDirectUpdate('parking_spots', spotId, updateBody)
       ]);
     }
 
@@ -490,9 +483,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 }
 
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
-  const { data: { session } } = await supabase.auth.getSession();
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
-
   const directNow = new Date().toISOString();
   const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
 
@@ -500,19 +491,13 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
     const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
     if (isCar) {
       await Promise.all([
-        rawDirectUpdate('car_parking_spots', spotId, releaseBody),
-        rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, releaseBody),
-        rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, releaseBody),
-        supabase.from('car_parking_spots').update(releaseBody).eq('id', spotId),
-        supabase.from('car_parking_spots').update(releaseBody).eq('id', `CAR-ZHUGU-${directSpotNumber}`),
-        supabase.from('car_parking_spots').update(releaseBody).eq('number', `CAR-${directSpotNumber}`)
+        supabase.from('car_parking_spots').update(releaseBody).or(`id.eq.${spotId},id.eq.CAR-ZHUGU-${directSpotNumber},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber}`),
+        rawDirectUpdate('car_parking_spots', spotId, releaseBody)
       ]);
     } else {
       await Promise.all([
-        rawDirectUpdate('parking_spots', spotId, releaseBody),
-        rawDirectUpdate('parking_spots', directSpotNumber, releaseBody),
-        rawDirectUpdate('parking_spots', `S-${directSpotNumber}`, releaseBody),
-        supabase.from('parking_spots').update(releaseBody).eq('id', spotId)
+        supabase.from('parking_spots').update(releaseBody).or(`id.eq.${spotId},id.eq.S-${directSpotNumber},number.eq.${directSpotNumber}`),
+        rawDirectUpdate('parking_spots', spotId, releaseBody)
       ]);
     }
 
@@ -522,7 +507,7 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
       if (localHistRaw) {
         const localHistList: HistoryRecord[] = JSON.parse(localHistRaw);
         const updated = localHistList.map(h => {
-          if ((h.spot_number === directSpotNumber || h.spot_id === spotId) && !h.end_time) {
+          if ((h.spot_number.toUpperCase() === directSpotNumber.toUpperCase() || h.spot_id === spotId) && !h.end_time) {
             return { ...h, end_time: directNow };
           }
           return h;
