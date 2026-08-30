@@ -872,7 +872,10 @@ export default function App() {
                     message: '您確定要離開目前的車位嗎？車位將變回空位。',
                     onConfirm: async () => {
                       // 🎯 100% 樂觀秒離場：秒關 Modal、秒改車位、秒跳轉地圖、秒清空時間！
-                      setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+                      myActiveSpotIdRef.current = null;
+                      localStorage.removeItem('my_active_spot_id');
+
+                      setSpots(prev => prev.map(s => (s.id === id || s.number.replace('CAR-', '') === id.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
                       setModal(prev => ({ ...prev, isOpen: false }));
                       setStartTime(null);
                       setSearchQuery("");
@@ -884,7 +887,8 @@ export default function App() {
                         message: '🎉 已成功完成車位離場與結算！感謝您的使用，祝您一路平安！'
                       });
 
-                      api.releaseSpot(id).catch(e => console.warn("背景釋放連線:", e));
+                      const cleanId = id || myActiveSpotIdRef.current || 'CAR-ZHUGU-A01';
+                      api.releaseSpot(cleanId).catch(e => console.warn("背景釋放連線:", e));
                       fetchHistory();
                       fetchSpots();
                     }
