@@ -76,7 +76,18 @@ export default function App() {
   const [vehicleType, setVehicleType] = useState<'moto' | 'car'>('moto');
   const [vehicleMode, setVehicleMode] = useState<VehicleMode>('motorcycle');
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [spots, setSpots] = useState<ParkingSpot[]>([]);
+  const [motoSpots, setMotoSpots] = useState<ParkingSpot[]>([]);
+  const [carSpots, setCarSpots] = useState<ParkingSpot[]>([]);
+  const spots = vehicleType === 'car' ? carSpots : motoSpots;
+  const setSpots = (updater: ParkingSpot[] | ((prev: ParkingSpot[]) => ParkingSpot[])) => {
+    if (typeof updater === 'function') {
+      if (vehicleType === 'car') setCarSpots(prev => updater(prev));
+      else setMotoSpots(prev => updater(prev));
+    } else {
+      if (vehicleType === 'car') setCarSpots(updater);
+      else setMotoSpots(updater);
+    }
+  };
   const [spotsError, setSpotsError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [startTime, setStartTime] = useState<Date | null>(null);
@@ -418,25 +429,27 @@ export default function App() {
   const myActiveSpotIdRef = useRef<string | null>(localStorage.getItem('my_active_spot_id') || null);
   const wasParkingActiveRef = useRef<boolean>(false);
   const isInitialFetchRef = useRef<boolean>(true);
-  const fetchSpots = useCallback(async (typeOverride?: 'moto' | 'car') => {
-    const activeType = typeOverride || vehicleType;
+  const fetchSpots = useCallback(async () => {
     try {
-      const list = await api.getSpots(activeType);
+      const [motos, cars] = await Promise.all([
+        api.getSpots('moto'),
+        api.getSpots('car')
+      ]);
       setSpotsError(null);
 
-      // 🎯 1. 核心判定：如果本機有記錄「我正在停放的車位」，檢查雲端資料庫是否已被管理員強制釋放
+      // 🎯 1. 雙載具強制釋放檢查
       if (myActiveSpotIdRef.current) {
         const activeId = myActiveSpotIdRef.current;
         const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+        const allList = [...motos, ...cars];
         
-        const targetSpot = list.find(s =>
+        const targetSpot = allList.find(s =>
           s.id === activeId ||
           s.number === activeId ||
           s.number.replace('CAR-', '').replace('S-', '') === cleanActiveId ||
           s.id.endsWith(cleanActiveId)
         );
 
-        // 🎯 核心修復：只要偵測到雲端車位被釋放為空位，0.1秒秒切地圖並跳通知！
         if (targetSpot && targetSpot.status === 'available') {
           const num = targetSpot.number.replace('CAR-', '').replace('S-', '');
           myActiveSpotIdRef.current = null;
@@ -455,55 +468,45 @@ export default function App() {
 
       isInitialFetchRef.current = false;
 
-      // 2. 自動嘗試匹配 API mine 車位
-      const activeMine = list.find(s => s.status === 'mine');
+      // 2. 存入各自獨立 state
+      setMotoSpots(motos as ParkingSpot[]);
+      setCarSpots(cars as ParkingSpot[]);
+
+      // 3. 自動嘗試匹配 API mine 車位
+      const allList = [...motos, ...cars];
+      const activeMine = allList.find(s => s.status === 'mine');
       if (activeMine) {
         myActiveSpotIdRef.current = activeMine.id;
         localStorage.setItem('my_active_spot_id', activeMine.id);
-      }
-
-      let finalList = list as ParkingSpot[];
-      if (myActiveSpotIdRef.current) {
-        const activeId = myActiveSpotIdRef.current;
-        const cleanActiveId = activeId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
-        finalList = finalList.map(s => {
-          if (s.status !== 'available' && (s.id === activeId || s.number.replace('CAR-', '').replace('S-', '') === cleanActiveId)) {
-            return { ...s, status: 'mine' as const };
-          }
-          return s;
-        });
-      }
-
-      setSpots(finalList);
-      if (activeMine && activeMine.occupied_at) {
-        setStartTime(parseSafeDate(activeMine.occupied_at));
-      } else if (!activeMine && !myActiveSpotIdRef.current) {
+        if (activeMine.occupied_at) {
+          setStartTime(parseSafeDate(activeMine.occupied_at));
+        }
+      } else if (!myActiveSpotIdRef.current) {
         setStartTime(null);
       }
-      return finalList;
     } catch (err: any) {
       const errorMsg = err?.message || '未知錯誤';
       if (errorMsg.includes('AbortError') || errorMsg.includes('Lock broken') || err?.name === 'AbortError') {
         return;
       }
       console.error('[fetchSpots] 車位資料載入失敗:', errorMsg, err);
-      setSpotsError(`無法載入${activeType === 'car' ? '汽車' : '機車'}車位資料\n${errorMsg}`);
+      setSpotsError(`無法載入車位資料\n${errorMsg}`);
     }
-  }, [vehicleType, openModal]);
+  }, [openModal]);
 
-  // 🎯 Polling 與 Realtime 完美連動：當 vehicleType 變更時，立即重設並抓取最新車位
+  // 🎯 Polling 與 Realtime 完美連動
   useEffect(() => {
     if (view !== 'login' && view !== 'vehicle-select') {
       fetchSpots();
       const timer = setInterval(fetchSpots, 1500);
 
-      const channelMoto = api.supabase.channel(`client-realtime-spots-moto-${vehicleType}`)
+      const channelMoto = api.supabase.channel(`client-realtime-spots-moto`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'parking_spots' }, () => {
           fetchSpots();
         })
         .subscribe();
 
-      const channelCar = api.supabase.channel(`client-realtime-spots-car-${vehicleType}`)
+      const channelCar = api.supabase.channel(`client-realtime-spots-car`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'car_parking_spots' }, () => {
           fetchSpots();
         })
@@ -515,7 +518,7 @@ export default function App() {
         api.supabase.removeChannel(channelCar);
       };
     }
-  }, [view, vehicleType, fetchSpots]);
+  }, [view, fetchSpots]);
 
   const handleLoginSuccess = async () => {
     // 🎯 0毫秒瞬間同步切換至載具選擇頁面，絕不被任何非同步請求阻擋
@@ -783,7 +786,7 @@ export default function App() {
                 onSelect={(type) => {
                   setVehicleType(type);
                   setVehicleMode(type === 'moto' ? 'motorcycle' : 'car');
-                  fetchSpots(type);
+                  fetchSpots();
                   setView('map');
                 }}
                 onLogout={handleLogout}
@@ -791,8 +794,8 @@ export default function App() {
             )}
             {view === 'map' && (
               <MapView 
-                key="map" 
-                spots={spots} 
+                key={`map-${vehicleType}`} 
+                spots={vehicleType === 'car' ? carSpots : motoSpots} 
                 query={searchQuery} 
                 setQuery={setSearchQuery} 
                 onSpotClick={handleSpotClick} 
@@ -801,7 +804,6 @@ export default function App() {
                   const nextType = vehicleType === 'car' ? 'moto' : 'car';
                   setVehicleType(nextType);
                   setVehicleMode(nextType === 'moto' ? 'motorcycle' : 'car');
-                  fetchSpots(nextType);
                 }}
                 onOpenMap={(opts) => {
                   setGoogleMapState({
