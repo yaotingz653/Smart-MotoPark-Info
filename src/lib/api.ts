@@ -355,6 +355,26 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
   return [];
 }
 
+/**
+ * 🎯 超強直連 REST API 更新：完全免疫過期 JWT 或 Session 死鎖干擾
+ */
+async function rawDirectUpdate(table: string, id: string, updateBody: any) {
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`;
+    await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(updateBody)
+    });
+  } catch (e) {
+    console.warn('rawDirectUpdate error:', e);
+  }
+}
 
 export interface SpotActionResult {
   success: boolean;
@@ -363,7 +383,7 @@ export interface SpotActionResult {
 }
 
 /**
- * 預約車位 (停車)
+ * 預約/停入車位
  * @param spotId 車位 ID
  * @returns 操作結果
  */
@@ -401,27 +421,22 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   }
 
   try {
+    const updateBody = { status: 'occupied', occupied_by: dbUserId, occupied_at: directNow };
     if (isCar) {
-      // 🎯 採用 100% 外鍵安全且原生穩固的確切 .eq 更新
-      await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
-        .eq('id', spotId);
-
-      await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
-        .eq('id', `CAR-ZHUGU-${directSpotNumber}`);
-
-      await supabase.from('car_parking_spots')
-        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
-        .eq('number', `CAR-${directSpotNumber}`);
+      // 🎯 雙重直連更新：1. 原生 REST 直連 + 2. Supabase Client
+      await Promise.all([
+        rawDirectUpdate('car_parking_spots', spotId, updateBody),
+        rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, updateBody),
+        rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, updateBody),
+        supabase.from('car_parking_spots').update(updateBody).eq('id', spotId)
+      ]);
     } else {
-      await supabase.from('parking_spots')
-        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
-        .eq('id', spotId);
-
-      await supabase.from('parking_spots')
-        .update({ status: 'occupied', occupied_by: dbUserId, occupied_at: directNow })
-        .eq('number', directSpotNumber);
+      await Promise.all([
+        rawDirectUpdate('parking_spots', spotId, updateBody),
+        rawDirectUpdate('parking_spots', directSpotNumber, updateBody),
+        rawDirectUpdate('parking_spots', `S-${directSpotNumber}`, updateBody),
+        supabase.from('parking_spots').update(updateBody).eq('id', spotId)
+      ]);
     }
 
     // 雲端嘗試寫入 (若匿名或 RLS 限制失敗則靜默忽略，本地歷史已保全)
@@ -462,26 +477,21 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
   const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
 
   try {
+    const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
     if (isCar) {
-      await supabase.from('car_parking_spots')
-        .update({ status: 'available', occupied_by: null, occupied_at: null })
-        .eq('id', spotId);
-
-      await supabase.from('car_parking_spots')
-        .update({ status: 'available', occupied_by: null, occupied_at: null })
-        .eq('id', `CAR-ZHUGU-${directSpotNumber}`);
-
-      await supabase.from('car_parking_spots')
-        .update({ status: 'available', occupied_by: null, occupied_at: null })
-        .eq('number', `CAR-${directSpotNumber}`);
+      await Promise.all([
+        rawDirectUpdate('car_parking_spots', spotId, releaseBody),
+        rawDirectUpdate('car_parking_spots', `CAR-ZHUGU-${directSpotNumber}`, releaseBody),
+        rawDirectUpdate('car_parking_spots', `CAR-${directSpotNumber}`, releaseBody),
+        supabase.from('car_parking_spots').update(releaseBody).eq('id', spotId)
+      ]);
     } else {
-      await supabase.from('parking_spots')
-        .update({ status: 'available', occupied_by: null, occupied_at: null })
-        .eq('id', spotId);
-
-      await supabase.from('parking_spots')
-        .update({ status: 'available', occupied_by: null, occupied_at: null })
-        .eq('number', directSpotNumber);
+      await Promise.all([
+        rawDirectUpdate('parking_spots', spotId, releaseBody),
+        rawDirectUpdate('parking_spots', directSpotNumber, releaseBody),
+        rawDirectUpdate('parking_spots', `S-${directSpotNumber}`, releaseBody),
+        supabase.from('parking_spots').update(releaseBody).eq('id', spotId)
+      ]);
     }
 
     // 🎯 雙軌歷史持久化更新離場時間
