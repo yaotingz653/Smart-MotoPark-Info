@@ -397,7 +397,28 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
       ]);
     }
 
-    // 非阻塞寫入歷史紀錄
+    // 🎯 雙軌歷史持久化：本地 localStorage 100% 確保寫入當前真實時間紀錄
+    try {
+      const localHistRaw = localStorage.getItem('smart_parking_history');
+      const localHistList: HistoryRecord[] = localHistRaw ? JSON.parse(localHistRaw) : [];
+      const newRecord: HistoryRecord = {
+        id: `hist-${Date.now()}`,
+        user_id: userId,
+        spot_id: spotId,
+        spot_number: directSpotNumber,
+        start_time: directNow,
+        end_time: '',
+        created_at: directNow
+      };
+      // 移除未完成的同車位舊紀錄並置頂
+      const filtered = localHistList.filter(h => !(h.spot_number === directSpotNumber && !h.end_time));
+      filtered.unshift(newRecord);
+      localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
+    } catch (e) {
+      console.warn('Local history save error:', e);
+    }
+
+    // 雲端嘗試寫入
     try {
       await supabase.from('parking_history').insert({
         user_id: userId,
@@ -407,7 +428,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
         start_time: directNow
       });
     } catch {
-      // 歷史日誌失敗不影響停車結果
+      // 歷史日誌雲端錯誤不影響
     }
 
     return {
@@ -457,6 +478,23 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
       ]);
     }
 
+    // 🎯 雙軌歷史持久化更新離場時間
+    try {
+      const localHistRaw = localStorage.getItem('smart_parking_history');
+      if (localHistRaw) {
+        const localHistList: HistoryRecord[] = JSON.parse(localHistRaw);
+        const updated = localHistList.map(h => {
+          if ((h.spot_number === directSpotNumber || h.spot_id === spotId) && !h.end_time) {
+            return { ...h, end_time: directNow };
+          }
+          return h;
+        });
+        localStorage.setItem('smart_parking_history', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Local history update error:', e);
+    }
+
     try {
       await supabase.from('parking_history').update({
         end_time: directNow,
@@ -467,9 +505,9 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
     }
 
     return { success: true, message: 'Released parking spot' };
-  } catch (e: any) {
-    console.warn('releaseSpot warning:', e);
-    return { success: true, message: 'Released parking spot' };
+  } catch (err: any) {
+    console.error('releaseSpot error:', err);
+    return { success: true, message: 'Released parking spot (Local)' };
   }
 }
 
@@ -520,24 +558,56 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   const { data: { session } } = await supabase.auth.getSession();
   const userId = session?.user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
 
-  let { data, error } = await supabase
-    .from('parking_history')
-    .select('*')
-    .or(`user_id.eq.${userId},user_id.eq.c811008c-077b-4ebc-8db7-2cd18129d584`)
-    .order('created_at', { ascending: false });
-
-  if (error || !data || data.length === 0) {
-    const { data: allData } = await supabase
-      .from('parking_history')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(50);
-    if (allData && allData.length > 0) {
-      data = allData;
-    }
+  let localList: HistoryRecord[] = [];
+  try {
+    const raw = localStorage.getItem('smart_parking_history');
+    if (raw) localList = JSON.parse(raw);
+  } catch (e) {
+    console.warn(e);
   }
 
-  return (data || []) as HistoryRecord[];
+  let dbList: HistoryRecord[] = [];
+  try {
+    let { data, error } = await supabase
+      .from('parking_history')
+      .select('*')
+      .or(`user_id.eq.${userId},user_id.eq.c811008c-077b-4ebc-8db7-2cd18129d584`)
+      .order('created_at', { ascending: false });
+
+    if (error || !data || data.length === 0) {
+      const { data: allData } = await supabase
+        .from('parking_history')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (allData && allData.length > 0) {
+        data = allData;
+      }
+    }
+    if (data) dbList = data as HistoryRecord[];
+  } catch (e) {
+    console.warn(e);
+  }
+
+  // 合併去重並按時間倒序排序
+  const mergedMap = new Map<string, HistoryRecord>();
+  localList.forEach(item => {
+    mergedMap.set(`${item.spot_number}-${item.start_time}`, item);
+  });
+  dbList.forEach(item => {
+    const key = `${item.spot_number}-${item.start_time}`;
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, item);
+    }
+  });
+
+  const merged = Array.from(mergedMap.values()).sort((a, b) => {
+    const tA = new Date(a.start_time || a.created_at).getTime();
+    const tB = new Date(b.start_time || b.created_at).getTime();
+    return tB - tA;
+  });
+
+  return merged;
 }
 
 export interface FavoriteSpot {
