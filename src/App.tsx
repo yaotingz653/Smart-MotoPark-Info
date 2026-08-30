@@ -632,26 +632,17 @@ export default function App() {
           myActiveSpotIdRef.current = null;
           localStorage.removeItem('my_active_spot_id');
 
-          setSpots(prev => prev.map(s => s.id === id ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          setSpots(prev => prev.map(s => (s.id === id || s.number.replace('CAR-', '') === id.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
           setModal(prev => ({ ...prev, isOpen: false }));
           setStartTime(null);
           setSearchQuery("");
 
-          openModal({
-            type: 'alert',
-            title: '離場成功通知',
-            message: `🎉 已成功完成車位 ${spot.number} 離場與結算！車位已恢復為空位。`
-          });
-
-          // 背景異步連線 Supabase 釋放
-          (async () => {
-            try {
-              await api.releaseSpot(id);
-              await Promise.all([fetchSpots(), fetchHistory()]);
-            } catch (err: any) {
-              console.warn("背景釋放警示:", err);
-            }
-          })();
+          try {
+            await api.releaseSpot(id);
+            await Promise.all([fetchSpots(), fetchHistory()]);
+          } catch (err: any) {
+            console.warn("釋放連線警示:", err);
+          }
         }
       });
       return;
