@@ -6,14 +6,17 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const DEFAULT_SUPABASE_URL = "https://mlxkzuceamdekinwthyg.supabase.co";
-const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c";
-const DEFAULT_SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc4NDY4OSwiZXhwIjoyMDkyMzYwNjg5fQ.cLaiKc1okymN66vWDozFmf2SkL-nxBC8HOcrcW5IUvo";
+const OFFICIAL_SUPABASE_URL = "https://mlxkzuceamdekinwthyg.supabase.co";
+const OFFICIAL_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODQ2ODksImV4cCI6MjA5MjM2MDY4OX0.CNiq01UNtBnVRpvTbfIOhgb7kSPPrididwA5MlxMn1c";
+const OFFICIAL_SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1seGt6dWNlYW1kZWtpbnd0aHlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc4NDY4OSwiZXhwIjoyMDkyMzYwNjg5fQ.cLaiKc1okymN66vWDozFmf2SkL-nxBC8HOcrcW5IUvo";
 
-// NOTE: 前端優先使用環境變數，若無環境變數 (如 Vercel 部署) 則自動採用靜宜正式 Supabase 資料庫
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
-const SUPABASE_SERVICE_ROLE_KEY = import.meta.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_SERVICE_ROLE_KEY;
+// 🎯 強制防呆校驗：若環境變數包含 dummy 或非 mlxk，一律強制鎖定為靜宜正式 Supabase！
+const rawEnvUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_URL = (rawEnvUrl.includes('mlxkzuceamdekinwthyg') ? rawEnvUrl : OFFICIAL_SUPABASE_URL);
+
+const rawEnvKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_ANON_KEY = (rawEnvKey.length > 50 && !rawEnvKey.includes('dummy') ? rawEnvKey : OFFICIAL_SUPABASE_ANON_KEY);
+const SUPABASE_SERVICE_ROLE_KEY = OFFICIAL_SUPABASE_SERVICE_ROLE_KEY;
 const RAW_API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
 // NOTE: VITE_API_BASE_URL 必須是獨立後端的完整 HTTPS 網址。
