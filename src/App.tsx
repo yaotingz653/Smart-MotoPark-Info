@@ -1488,7 +1488,7 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
   const COLUMN_GAP = isCar ? 10 : 5;
   const ROW_GAP = isCar ? 6 : 3;
 
-  const [selectedDestination, setSelectedDestination] = useState<string>('體育館/運動場');
+  const [selectedDestination, setSelectedDestination] = useState<string>('主顧樓');
   const [selectedParkingLot, setSelectedParkingLot] = useState<string | null>(null);
 
   const getLotRemainingSpots = useCallback((lotName: string) => {
@@ -1772,7 +1772,7 @@ function MapView({ spots, query, setQuery, onSpotClick, onScanClick, vehicleType
   const availableCount = spots.filter(s => s.status === 'available').length;
 
   const destinationList = Object.keys(CAMPUS_DESTINATIONS).filter(name => name !== "大門口");
-  const quickDestinations = ["體育館/運動場", "蓋夏圖書館", "伯鐸樓"];
+  const quickDestinations = ["主顧樓", "蓋夏圖書館", "伯鐸樓"];
 
   return (
     <motion.div
