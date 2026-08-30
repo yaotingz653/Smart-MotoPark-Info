@@ -610,29 +610,30 @@ export default function App() {
   };
 
   const handleSpotClick = async (id: string) => {
-    const cleanTarget = id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+    const cleanTarget = api.normalizeSpotNumber(id);
     const spot = spots.find(s => 
       s.id === id || 
-      s.number === id ||
-      s.id.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '') === cleanTarget ||
-      s.number.replace('CAR-', '').replace('S-', '') === cleanTarget
+      api.normalizeSpotNumber(s.number) === cleanTarget ||
+      api.normalizeSpotNumber(s.id) === cleanTarget
     );
+    if (!spot) return;
+
     const activeStoredId = localStorage.getItem('my_active_spot_id') || myActiveSpotIdRef.current;
-    const cleanActiveStored = activeStoredId ? activeStoredId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
-    const isThisMySpot = spot.status === 'mine' || (cleanActiveStored && cleanTarget.toUpperCase() === cleanActiveStored);
+    const cleanActiveStored = api.normalizeSpotNumber(activeStoredId);
+    const isThisMySpot = spot.status === 'mine' || (cleanActiveStored && cleanTarget === cleanActiveStored);
 
     // 這是我的車位 → 離開（車位變回空位）
     if (isThisMySpot) {
       openModal({
         type: 'confirm',
         title: '確認離開',
-        message: `您確定要從車位 ${spot.number.replace('CAR-', '')} 離開嗎？車位將變回空位。`,
+        message: `您確定要從車位 ${api.normalizeSpotNumber(spot.number)} 離開嗎？車位將變回空位。`,
         onConfirm: async () => {
           // 🎯 100% 樂觀瞬間秒釋放車位與清空計時器
           myActiveSpotIdRef.current = null;
           localStorage.removeItem('my_active_spot_id');
 
-          setSpots(prev => prev.map(s => (s.id === id || s.number.replace('CAR-', '') === id.replace('CAR-ZHUGU-', '').replace('CAR-', '')) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
+          setSpots(prev => prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
           setModal(prev => ({ ...prev, isOpen: false }));
           setStartTime(null);
           setSearchQuery("");
@@ -673,7 +674,7 @@ export default function App() {
       // 🎯 智慧檢查：若本機有記錄停車，但雲端該車位實際上已是空位，自動解除舊鎖
       if (myActiveSpotIdRef.current) {
         const currentlyOccupied = spots.find(s => 
-          (s.id === myActiveSpotIdRef.current || s.number === myActiveSpotIdRef.current) && 
+          (s.id === myActiveSpotIdRef.current || api.normalizeSpotNumber(s.number) === api.normalizeSpotNumber(myActiveSpotIdRef.current)) && 
           (s.status === 'mine' || s.status === 'occupied')
         );
 
@@ -685,7 +686,7 @@ export default function App() {
           openModal({
             type: 'alert',
             title: '已停放其他車位',
-            message: `您目前已在車位 ${currentlyOccupied.number.replace('CAR-', '').replace('S-', '')} 停放中！若要更換車位，請先至停車狀態頁釋放原車位。`
+            message: `您目前已在車位 ${api.normalizeSpotNumber(currentlyOccupied.number)} 停放中！若要更換車位，請先至停車狀態頁釋放原車位。`
           });
           return;
         }
@@ -694,7 +695,7 @@ export default function App() {
       openModal({
         type: 'confirm',
         title: '確認停車',
-        message: `您要停入車位 ${spot.number.replace('CAR-', '')} 嗎？`,
+        message: `您要停入車位 ${api.normalizeSpotNumber(spot.number)} 嗎？`,
         showReportBtn: true,
         spotId: id,
         onConfirm: async () => {
@@ -707,7 +708,7 @@ export default function App() {
 
           // 🎯 樂觀秒更新 React spots State
           setSpots(prev => {
-            return prev.map(s => s.id === id ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s);
+            return prev.map(s => (s.id === id || api.normalizeSpotNumber(s.number) === cleanTarget) ? { ...s, status: 'mine' as const, occupied_by: myUserId, occupied_at: now.toISOString() } : s);
           });
 
           // 🎯 0.001 秒秒關 Modal、秒啟動計時器、秒切換至狀態頁！

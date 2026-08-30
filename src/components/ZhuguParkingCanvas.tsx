@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Accessibility, Car, Crown, Star, ArrowUp, ArrowDown, Plus, Minus, MapPin, Compass } from 'lucide-react';
 import { ParkingSpot } from '../types';
+import { normalizeSpotNumber } from '../lib/api';
 
 interface ZhuguParkingCanvasProps {
   spots: ParkingSpot[];
@@ -62,13 +63,13 @@ export default function ZhuguParkingCanvas({ spots, onSpotClick }: ZhuguParkingC
 
   // 取得車位即時狀態
   const getSpotStatus = (num: string) => {
-    const cleanNum = num.toUpperCase();
+    const cleanNum = normalizeSpotNumber(num);
     const activeStoredId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
-    const cleanActiveStored = activeStoredId ? activeStoredId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+    const cleanActiveStored = normalizeSpotNumber(activeStoredId);
 
     const spot = spots.find(s => {
-      const sNum = s.number.toUpperCase().replace('CAR-', '').replace('S-', '');
-      const sId = s.id.toUpperCase().replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+      const sNum = normalizeSpotNumber(s.number);
+      const sId = normalizeSpotNumber(s.id);
       return sNum === cleanNum || sId === cleanNum;
     });
 

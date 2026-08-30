@@ -330,11 +330,11 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
       const myUserIds = [userId, fallbackUserId, 'guest'].filter(Boolean);
 
       const storedActiveId = localStorage.getItem('my_active_spot_id');
-      const cleanStoredId = storedActiveId ? storedActiveId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+      const cleanStoredId = normalizeSpotNumber(storedActiveId);
 
       return activeSpots.map((spot: any) => {
-        const spotCleanNum = (spot.number || spot.id).replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase();
-        const isMatchesStored = cleanStoredId && (spotCleanNum === cleanStoredId || spot.id.toUpperCase() === storedActiveId?.toUpperCase());
+        const spotCleanNum = normalizeSpotNumber(spot.number || spot.id);
+        const isMatchesStored = cleanStoredId && spotCleanNum === cleanStoredId;
         const isMine = (spot.status === 'occupied' || spot.status === 'mine') && (myUserIds.includes(spot.occupied_by) || isMatchesStored);
         return {
           ...spot,
@@ -361,10 +361,18 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
 }
 
 /**
+ * 🎯 統一車位號碼正規化函數：消除所有前綴並轉大寫 (如 CAR-ZHUGU-G01 -> G01, S-A01 -> A01)
+ */
+export function normalizeSpotNumber(idOrNum: string | null | undefined): string {
+  if (!idOrNum) return '';
+  return idOrNum.replace(/^(CAR-ZHUGU-|CAR-|S-)/i, '').trim().toUpperCase();
+}
+
+/**
  * 🎯 超強直連 REST API 更新：使用標準 ANON_KEY 確保瀏覽器 CORS 100% 暢通直連
  */
 async function rawDirectUpdate(table: string, spotId: string, updateBody: any) {
-  const cleanNum = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const cleanNum = normalizeSpotNumber(spotId);
   const bodyStr = JSON.stringify(updateBody);
 
   const headers = {
@@ -377,6 +385,7 @@ async function rawDirectUpdate(table: string, spotId: string, updateBody: any) {
   const queries = [
     `id=eq.${spotId}`,
     `id=eq.CAR-ZHUGU-${cleanNum}`,
+    `id=eq.S-${cleanNum}`,
     `number=eq.CAR-${cleanNum}`,
     `number=eq.${cleanNum}`
   ];
@@ -412,7 +421,8 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
 
   const directNow = new Date().toISOString();
-  const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const directSpotNumber = normalizeSpotNumber(spotId);
+  const table = isCar ? 'car_parking_spots' : 'parking_spots';
 
   // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，絕不遺漏任何一秒
   try {
@@ -427,7 +437,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
       end_time: '',
       created_at: directNow
     };
-    const filtered = localHistList.filter(h => !(h.spot_number.toUpperCase() === directSpotNumber.toUpperCase() && !h.end_time));
+    const filtered = localHistList.filter(h => !(normalizeSpotNumber(h.spot_number) === directSpotNumber && !h.end_time));
     filtered.unshift(newRecord);
     localStorage.setItem('smart_parking_history', JSON.stringify(filtered.slice(0, 30)));
   } catch (e) {
@@ -436,17 +446,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 
   try {
     const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
-    if (isCar) {
-      await Promise.all([
-        supabase.from('car_parking_spots').update(updateBody).or(`id.eq.${spotId},id.eq.CAR-ZHUGU-${directSpotNumber},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber}`),
-        rawDirectUpdate('car_parking_spots', spotId, updateBody)
-      ]);
-    } else {
-      await Promise.all([
-        supabase.from('parking_spots').update(updateBody).or(`id.eq.${spotId},id.eq.S-${directSpotNumber},number.eq.${directSpotNumber}`),
-        rawDirectUpdate('parking_spots', spotId, updateBody)
-      ]);
-    }
+    await rawDirectUpdate(table, spotId, updateBody);
 
     // 🎯 雲端歷史安全寫入：避免 spot_id 指向 parking_spots 引發 409 外鍵衝突
     try {
@@ -481,21 +481,12 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
   const isCar = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
   const directNow = new Date().toISOString();
-  const directSpotNumber = spotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '');
+  const directSpotNumber = normalizeSpotNumber(spotId);
+  const table = isCar ? 'car_parking_spots' : 'parking_spots';
 
   try {
     const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
-    if (isCar) {
-      await Promise.all([
-        supabase.from('car_parking_spots').update(releaseBody).or(`id.eq.${spotId},id.eq.CAR-ZHUGU-${directSpotNumber},number.eq.CAR-${directSpotNumber},number.eq.${directSpotNumber}`),
-        rawDirectUpdate('car_parking_spots', spotId, releaseBody)
-      ]);
-    } else {
-      await Promise.all([
-        supabase.from('parking_spots').update(releaseBody).or(`id.eq.${spotId},id.eq.S-${directSpotNumber},number.eq.${directSpotNumber}`),
-        rawDirectUpdate('parking_spots', spotId, releaseBody)
-      ]);
-    }
+    await rawDirectUpdate(table, spotId, releaseBody);
 
     // 🎯 雙軌歷史持久化更新離場時間
     try {
@@ -503,7 +494,7 @@ export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
       if (localHistRaw) {
         const localHistList: HistoryRecord[] = JSON.parse(localHistRaw);
         const updated = localHistList.map(h => {
-          if ((h.spot_number.toUpperCase() === directSpotNumber.toUpperCase() || h.spot_id === spotId) && !h.end_time) {
+          if ((normalizeSpotNumber(h.spot_number) === directSpotNumber || h.spot_id === spotId) && !h.end_time) {
             return { ...h, end_time: directNow };
           }
           return h;
