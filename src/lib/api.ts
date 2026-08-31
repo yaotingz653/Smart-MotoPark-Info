@@ -299,21 +299,91 @@ export async function syncUserProfile(profile: UserProfile): Promise<void> {
 export interface SpotData {
   id: string;
   number: string;
-  status: "available" | "occupied" | "mine";
+  status: "available" | "occupied" | "mine" | "disabled";
   occupied_by?: string | null;
   occupied_at?: string | null;
+  parkingBlockId?: string;
+}
+
+/**
+ * 🎯 統一車位號碼正規化函數：消除所有前綴並轉標準顯示格式 (如 S-0-0 -> A-01, S-4-9 -> E-10, CAR-ZHUGU-A10 -> A10, CAR-A10 -> A10)
+ */
+export function normalizeSpotNumber(idOrNum: string | null | undefined): string {
+  if (!idOrNum) return '';
+  const str = idOrNum.trim();
+
+  // 1. 若是機車網格 ID 格式 S-r-c (例如 S-0-0 -> A-01, S-4-9 -> E-10, S-23-21 -> X-22)
+  const motoCoordMatch = str.match(/^S-(\d+)-(\d+)$/i);
+  if (motoCoordMatch) {
+    const r = parseInt(motoCoordMatch[1], 10);
+    const c = parseInt(motoCoordMatch[2], 10);
+    const rowLetter = String.fromCharCode(65 + r);
+    const colNum = String(c + 1).padStart(2, '0');
+    return `${rowLetter}-${colNum}`;
+  }
+
+  // 2. 若是汽車格式 CAR-ZHUGU-A10 或 CAR-A10
+  if (/^CAR-(ZHUGU-)?/i.test(str)) {
+    return str.replace(/^CAR-(ZHUGU-)?/i, '').trim().toUpperCase();
+  }
+
+  // 3. 機車標準編號格式 (例如 A-01, B-12, E-10) -> 保留標準連字號
+  const motoDashMatch = str.match(/^([A-Z])-(\d{1,2})$/i);
+  if (motoDashMatch) {
+    const letter = motoDashMatch[1].toUpperCase();
+    const num = motoDashMatch[2].padStart(2, '0');
+    return `${letter}-${num}`;
+  }
+
+  return str.toUpperCase();
+}
+
+/**
+ * 🎯 將任何輸入格式轉為標準資料庫 ID (如 A-01 / A01 -> S-0-0, A10 / CAR-A10 -> CAR-ZHUGU-A10)
+ */
+export function getStandardizedSpotId(idOrNum: string | null | undefined, vehicleType?: 'moto' | 'car'): string {
+  if (!idOrNum) return '';
+  const str = idOrNum.trim();
+
+  // 若已經是標準機車 S-r-c
+  if (/^S-\d+-\d+$/i.test(str)) {
+    return str.toUpperCase();
+  }
+
+  // 若已經是標準汽車 CAR-ZHUGU-xxx
+  if (/^CAR-ZHUGU-/i.test(str)) {
+    return str.toUpperCase();
+  }
+
+  const isCar = str.startsWith('CAR-') || vehicleType === 'car';
+  const clean = str.replace(/^(CAR-ZHUGU-|CAR-|S-)/i, '').trim().toUpperCase();
+
+  if (isCar) {
+    return `CAR-ZHUGU-${clean}`;
+  }
+
+  // 機車編號轉 S-r-c
+  const motoMatch = clean.match(/^([A-Z])-?(\d{1,2})$/);
+  if (motoMatch) {
+    const r = motoMatch[1].charCodeAt(0) - 65;
+    const c = parseInt(motoMatch[2], 10) - 1;
+    if (r >= 0 && r < 26 && c >= 0) {
+      return `S-${r}-${c}`;
+    }
+  }
+
+  return `S-${clean}`;
 }
 
 /**
  * 取得所有車位
  * @param vehicleType 'moto' 機車 | 'car' 汽車
  * @returns 車位列表
- * @throws 若後端與 Supabase 均失敗，拋出含詳細診斷資訊的 Error
  */
 export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirectSupabase = true): Promise<SpotData[]> {
   const table = vehicleType === 'car' ? 'car_parking_spots' : 'parking_spots';
 
-  // 1. 優先極速走 REST API 直連 (0.05 秒即時載入，完全免疫任何 Auth Lock)
+  // 1. 優先走 REST API 直連
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*&order=id.asc`, {
       headers: {
@@ -325,7 +395,7 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
-        // 🎯 機車精確過濾為 574 格標準格 (S- 開頭)；汽車精確過濾為主顧樓標準格 (CAR-ZHUGU- / CAR- 開頭)
+        // 機車過濾 S- 開頭或標準格；汽車過濾 CAR-ZHUGU- / CAR- 開頭
         const activeSpots = data.filter((s: any) => {
           if (s.status === 'disabled' || s.is_active === false) return false;
           if (vehicleType === 'moto') {
@@ -335,27 +405,37 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
           }
         });
 
-        const storedActiveId = localStorage.getItem('my_active_spot_id');
-        const cleanStoredId = normalizeSpotNumber(storedActiveId);
+        const storedActiveId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+        const storedActiveNum = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_number') : null;
+        const cleanStoredNum = normalizeSpotNumber(storedActiveNum || storedActiveId);
+        const stdStoredId = getStandardizedSpotId(storedActiveId, vehicleType);
 
-        // 🎯 讀取本地未結算歷史紀錄作為雙重愛車保險
-        const localHistRaw = localStorage.getItem('smart_parking_history');
+        // 讀取本地未結算歷史紀錄作為雙重愛車保險
+        const localHistRaw = typeof window !== 'undefined' ? localStorage.getItem('smart_parking_history') : null;
         let histActiveNum: string | null = null;
+        let histActiveId: string | null = null;
         try {
           if (localHistRaw) {
             const list = JSON.parse(localHistRaw);
-            if (Array.isArray(list) && list.length > 0 && !list[0].end_time) {
+            if (Array.isArray(list) && list.length > 0 && (!list[0].end_time || list[0].end_time === '')) {
               histActiveNum = normalizeSpotNumber(list[0].spot_number);
+              histActiveId = getStandardizedSpotId(list[0].spot_id || list[0].spot_number, vehicleType);
             }
           }
         } catch {}
 
         return activeSpots.map((spot: any) => {
           const spotCleanNum = normalizeSpotNumber(spot.number || spot.id);
-          const isMatchesStored = (cleanStoredId && spotCleanNum === cleanStoredId) || (histActiveNum && spotCleanNum === histActiveNum);
-          const isMine = (spot.status === 'occupied' || spot.status === 'mine') && isMatchesStored;
+          const spotStdId = getStandardizedSpotId(spot.id || spot.number, vehicleType);
+
+          const isMatchesStored = 
+            (cleanStoredNum && (spotCleanNum === cleanStoredNum || spotStdId === stdStoredId || spot.id === storedActiveId)) ||
+            (histActiveNum && (spotCleanNum === histActiveNum || spotStdId === histActiveId));
+
+          const isMine = isMatchesStored && (spot.status === 'occupied' || spot.status === 'mine' || (storedActiveId && (spot.id === storedActiveId || spotStdId === stdStoredId)));
           return {
             ...spot,
+            number: spotCleanNum,
             status: isMine ? 'mine' : (spot.status === 'mine' ? 'occupied' : spot.status)
           };
         });
@@ -380,18 +460,11 @@ export async function getSpots(vehicleType: 'moto' | 'car' = 'moto', preferDirec
 }
 
 /**
- * 🎯 統一車位號碼正規化函數：消除所有前綴並轉大寫 (如 CAR-ZHUGU-G01 -> G01, S-A01 -> A01)
- */
-export function normalizeSpotNumber(idOrNum: string | null | undefined): string {
-  if (!idOrNum) return '';
-  return idOrNum.replace(/^(CAR-ZHUGU-|CAR-|S-)/i, '').trim().toUpperCase();
-}
-
-/**
  * 🎯 超強直連 REST API 更新：使用標準 ANON_KEY 確保瀏覽器 CORS 100% 暢通直連
  */
-async function rawDirectUpdate(table: string, spotId: string, updateBody: any) {
-  const cleanNum = normalizeSpotNumber(spotId);
+async function rawDirectUpdate(table: string, spotIdOrNum: string, updateBody: any) {
+  const cleanNum = normalizeSpotNumber(spotIdOrNum);
+  const stdId = getStandardizedSpotId(spotIdOrNum);
   const bodyStr = JSON.stringify(updateBody);
 
   const headers = {
@@ -402,15 +475,17 @@ async function rawDirectUpdate(table: string, spotId: string, updateBody: any) {
   };
 
   const queries = [
-    `id=eq.${spotId}`,
+    `id=eq.${spotIdOrNum}`,
+    `id=eq.${stdId}`,
     `id=eq.CAR-ZHUGU-${cleanNum}`,
     `id=eq.S-${cleanNum}`,
     `number=eq.CAR-${cleanNum}`,
-    `number=eq.${cleanNum}`
+    `number=eq.${cleanNum}`,
+    `number=eq.${cleanNum.replace('-', '')}`
   ];
 
   await Promise.allSettled(
-    queries.map(q => 
+    Array.from(new Set(queries)).map(q => 
       fetch(`${SUPABASE_URL}/rest/v1/${table}?${q}`, {
         method: 'PATCH',
         headers,
@@ -428,47 +503,30 @@ export interface SpotActionResult {
 
 /**
  * 預約/停入車位
- * @param spotId 車位 ID
+ * @param spotId 車位 ID 或編號
  * @returns 操作結果
  */
 export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   const localUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
   const directNow = new Date().toISOString();
   const directSpotNumber = normalizeSpotNumber(spotId);
+  const stdSpotId = getStandardizedSpotId(spotId);
 
-  // 🎯 雙軌歷史持久化：第一時間 100% 寫入本地 localStorage，並先結算所有舊紀錄
-  try {
-    const localHistRaw = localStorage.getItem('smart_parking_history');
-    const localHistList: HistoryRecord[] = localHistRaw ? JSON.parse(localHistRaw) : [];
-    // 先把所有舊紀錄加上 end_time 結算
-    const settledOld = localHistList.map(h => (!h.end_time || h.end_time === '') ? { ...h, end_time: directNow } : h);
-    const newRecord: HistoryRecord = {
-      id: `hist-${Date.now()}`,
-      user_id: localUserId,
-      spot_id: spotId,
-      spot_number: directSpotNumber,
-      start_time: directNow,
-      end_time: '',
-      created_at: directNow
-    };
-    settledOld.unshift(newRecord);
-    localStorage.setItem('smart_parking_history', JSON.stringify(settledOld.slice(0, 30)));
-  } catch (e) {
-    console.warn('Local history save error:', e);
-  }
+  // 🎯 統一使用標準 recordParkingStart 管理歷史與活躍停車鎖
+  recordParkingStart(stdSpotId, directSpotNumber, directNow);
 
   try {
     const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
-    // 🎯 雙表全佔用保險：同時對 car_parking_spots 與 parking_spots 發送佔用，徹底杜絕車種判斷失誤
+    // 🎯 雙表全佔用保險：同時對 car_parking_spots 與 parking_spots 發送佔用
     await Promise.allSettled([
       rawDirectUpdate('car_parking_spots', spotId, updateBody),
       rawDirectUpdate('parking_spots', spotId, updateBody)
     ]);
 
-    // 🎯 雲端歷史安全寫入：避免 spot_id 指向 parking_spots 引發 409 外鍵衝突
+    // 🎯 雲端歷史安全寫入
     try {
-      const isCarSpot = spotId.startsWith('CAR-') || spotId.includes('ZHUGU') || /^[A-J][0-9]{2}$/i.test(directSpotNumber);
-      const historySpotId = isCarSpot ? 'LOT-ROADSIDE-4' : spotId;
+      const isCarSpot = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
+      const historySpotId = isCarSpot ? 'LOT-ROADSIDE-4' : stdSpotId;
       const historyUserId = '6e4f4702-d7bf-4686-bf70-8676ceb5317f';
       await supabase.from('parking_history').insert({
         user_id: historyUserId,
@@ -484,14 +542,14 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
     return {
       success: true,
       message: `Reserved ${directSpotNumber}`,
-      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
+      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
     };
   } catch (err: any) {
     console.error('reserveSpot error:', err);
     return {
       success: true,
       message: `Reserved ${directSpotNumber} (Local)`,
-      spot: { id: spotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
+      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
     };
   }
 }
@@ -499,37 +557,24 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
 export async function releaseSpot(spotId: string): Promise<SpotActionResult> {
   const directNow = new Date().toISOString();
   const directSpotNumber = normalizeSpotNumber(spotId);
+  const stdSpotId = getStandardizedSpotId(spotId);
+
+  // 🎯 統一使用標準 recordParkingEnd 結算歷史並清除活躍鎖
+  recordParkingEnd(directNow);
 
   try {
     const releaseBody = { status: 'available', occupied_by: null, occupied_at: null };
-    // 🎯 雙表全釋放保險：同時對 car_parking_spots 與 parking_spots 發送釋放
+    // 🎯 雙表全釋放保險
     await Promise.allSettled([
       rawDirectUpdate('car_parking_spots', spotId, releaseBody),
       rawDirectUpdate('parking_spots', spotId, releaseBody)
     ]);
 
-    // 🎯 雙軌歷史持久化更新離場時間：將所有未結算記錄（包括當前車位）全部結算為當前離場時間
-    try {
-      const localHistRaw = localStorage.getItem('smart_parking_history');
-      if (localHistRaw) {
-        const localHistList: HistoryRecord[] = JSON.parse(localHistRaw);
-        const updated = localHistList.map(h => {
-          if (!h.end_time || h.end_time === '' || normalizeSpotNumber(h.spot_number) === directSpotNumber) {
-            return { ...h, end_time: directNow };
-          }
-          return h;
-        });
-        localStorage.setItem('smart_parking_history', JSON.stringify(updated));
-      }
-    } catch (e) {
-      console.warn('Local history update error:', e);
-    }
-
     try {
       await supabase.from('parking_history').update({
         end_time: directNow,
         action: 'release'
-      }).eq('spot_number', directSpotNumber).is('end_time', null);
+      }).or(`spot_number.eq.${directSpotNumber},spot_id.eq.${stdSpotId}`).is('end_time', null);
     } catch {
       // 忽略歷史寫入
     }
@@ -580,108 +625,191 @@ export interface HistoryRecord {
   created_at: string;
 }
 
+export interface FormattedHistoryItem {
+  id: string;
+  number: string;
+  time: string;
+}
+
 /**
- * 取得停車歷史
+ * 🎯 紀錄停車歷史：新增一筆進行中紀錄，並結算所有舊進行中紀錄
+ */
+export function recordParkingStart(spotId: string, spotNumber: string, startTimeIso: string = new Date().toISOString()): HistoryRecord[] {
+  const cleanNum = normalizeSpotNumber(spotNumber || spotId);
+  const stdId = getStandardizedSpotId(spotId);
+  const localUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
+
+  let currentList: HistoryRecord[] = [];
+  try {
+    const raw = localStorage.getItem('smart_parking_history');
+    if (raw) currentList = JSON.parse(raw);
+    if (!Array.isArray(currentList)) currentList = [];
+  } catch {
+    currentList = [];
+  }
+
+  // 1. 先將所有進行中的舊紀錄結束（end_time 設為當前開始時間）
+  const settledList = currentList.map(h => {
+    if (!h.end_time || h.end_time === '') {
+      return { ...h, end_time: startTimeIso };
+    }
+    return h;
+  });
+
+  // 2. 建立新進行中紀錄
+  const newRecord: HistoryRecord = {
+    id: `hist-${Date.now()}-${cleanNum}`,
+    user_id: localUserId,
+    spot_id: stdId,
+    spot_number: cleanNum,
+    start_time: startTimeIso,
+    end_time: '',
+    created_at: startTimeIso
+  };
+
+  // 3. 插入最前端並持久化
+  settledList.unshift(newRecord);
+  const finalList = settledList.slice(0, 50);
+  try {
+    localStorage.setItem('smart_parking_history', JSON.stringify(finalList));
+    localStorage.setItem('my_active_spot_id', stdId);
+    localStorage.setItem('my_active_spot_number', cleanNum);
+  } catch (e) {
+    console.warn(e);
+  }
+
+  return finalList;
+}
+
+/**
+ * 🎯 結算停車歷史：將目前進行中的紀錄標註結束時間
+ */
+export function recordParkingEnd(endTimeIso: string = new Date().toISOString()): HistoryRecord[] {
+  let currentList: HistoryRecord[] = [];
+  try {
+    const raw = localStorage.getItem('smart_parking_history');
+    if (raw) currentList = JSON.parse(raw);
+    if (!Array.isArray(currentList)) currentList = [];
+  } catch {
+    currentList = [];
+  }
+
+  const finalizedList = currentList.map(h => {
+    if (!h.end_time || h.end_time === '') {
+      return { ...h, end_time: endTimeIso };
+    }
+    return h;
+  });
+
+  try {
+    localStorage.setItem('smart_parking_history', JSON.stringify(finalizedList));
+    localStorage.removeItem('my_active_spot_id');
+    localStorage.removeItem('my_active_spot_number');
+  } catch (e) {
+    console.warn(e);
+  }
+
+  return finalizedList;
+}
+
+/**
+ * 取得使用者的停車歷史紀錄
  * @returns 歷史紀錄列表
  */
 export async function getHistory(): Promise<HistoryRecord[]> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const userId = session?.user?.id;
+  const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
+  const activeSpotNum = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_number') : null;
+  const activeCleanNum = normalizeSpotNumber(activeSpotNum || activeSpotId);
 
   let localList: HistoryRecord[] = [];
   try {
-    const keys = ['smart_parking_history', 'parking_history', 'user_parking_history'];
-    keys.forEach(k => {
-      const raw = localStorage.getItem(k);
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            localList.push(...parsed);
-          }
-        } catch {}
-      }
-    });
-  } catch (e) {
-    console.warn(e);
+    const raw = localStorage.getItem('smart_parking_history');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) localList = parsed;
+    }
+  } catch {}
+
+  // 確保車位號碼全部標準化
+  let normalizedList = localList.map(item => ({
+    ...item,
+    spot_number: normalizeSpotNumber(item.spot_number || item.spot_id)
+  }));
+
+  // 如果當前有活躍停車，確保第一筆是當前進行中車位
+  if (activeCleanNum && activeCleanNum !== '0-0' && activeSpotId) {
+    const activeIndex = normalizedList.findIndex(h => h.spot_number === activeCleanNum && (!h.end_time || h.end_time === ''));
+    if (activeIndex > 0) {
+      const [activeItem] = normalizedList.splice(activeIndex, 1);
+      normalizedList.unshift(activeItem);
+    } else if (activeIndex === -1) {
+      normalizedList.unshift({
+        id: `hist-live-${Date.now()}`,
+        user_id: 'c811008c-077b-4ebc-8db7-2cd18129d584',
+        spot_id: activeSpotId,
+        spot_number: activeCleanNum,
+        start_time: new Date().toISOString(),
+        end_time: '',
+        created_at: new Date().toISOString()
+      });
+    }
   }
 
-  // 🎯 若本地當前正在停車中，第一時間強制置頂目前進行中的車位！
-  const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
-  const activeCleanNum = activeSpotId ? activeSpotId.replace('CAR-ZHUGU-', '').replace('CAR-', '').replace('S-', '').toUpperCase() : null;
+  return normalizedList;
+}
 
-  if (activeSpotId && activeCleanNum) {
-    localList.unshift({
-      id: `hist-live-${activeCleanNum}`,
-      user_id: userId || 'c811008c-077b-4ebc-8db7-2cd18129d584',
-      spot_id: activeSpotId,
-      spot_number: activeCleanNum,
-      start_time: new Date().toISOString(),
-      end_time: '',
-      created_at: new Date().toISOString()
+/**
+ * 🎯 統一獲取已格式化完成的歷史紀錄列表（供 UI 直接渲染，消除全站重複格式化代碼）
+ */
+export async function getFormattedHistory(): Promise<FormattedHistoryItem[]> {
+  const list = await getHistory();
+
+  const parseSafeDate = (d: any): Date => {
+    if (!d) return new Date();
+    if (d instanceof Date) return isNaN(d.getTime()) ? new Date() : d;
+    const parsed = new Date(d);
+    return isNaN(parsed.getTime()) ? new Date() : parsed;
+  };
+
+  const formatTime = (timeStr?: string): string => {
+    if (!timeStr) return "";
+    try {
+      const date = parseSafeDate(timeStr);
+      const hours = date.getHours().toString().padStart(2, "0");
+      const minutes = date.getMinutes().toString().padStart(2, "0");
+      const seconds = date.getSeconds().toString().padStart(2, "0");
+      return `${hours}:${minutes}:${seconds}`;
+    } catch {
+      return "";
+    }
+  };
+
+  return list.map(h => {
+    const baseDateString = h.start_time || h.created_at;
+    const dateObj = parseSafeDate(baseDateString);
+    const formattedDate = dateObj.toLocaleString('zh-TW', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
     });
-  }
+    const start = formatTime(h.start_time);
+    const end = formatTime(h.end_time);
+    const finalTimeDisplay = (start && end)
+      ? `${formattedDate} (${start} - ${end})`
+      : (!end && start) ? `${formattedDate} (${start} - 進行中)` : formattedDate;
 
-  let dbList: HistoryRecord[] = [];
-  try {
-    const userFilter = userId ? `&user_id=eq.${userId}` : '';
-    const url = `${SUPABASE_URL}/rest/v1/parking_history?select=*${userFilter}&order=created_at.desc&limit=50`;
-    const res = await fetch(url, {
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-      }
-    });
-    const data = await res.json();
-    if (Array.isArray(data)) {
-      dbList = data as HistoryRecord[];
-    }
-  } catch (e) {
-    console.warn(e);
-  }
+    let cleanNumber = normalizeSpotNumber(h.spot_number || h.spot_id);
+    if (!cleanNumber || cleanNumber === '0-0') cleanNumber = 'A-01';
 
-  // 合併去重並按時間倒序排序
-  const mergedMap = new Map<string, HistoryRecord>();
-  localList.forEach(item => {
-    if (item && item.spot_number) {
-      mergedMap.set(`${item.spot_number.toUpperCase()}-${item.start_time || item.created_at}`, item);
-    }
+    return {
+      id: h.id,
+      number: cleanNumber,
+      time: finalTimeDisplay
+    };
   });
-  dbList.forEach(item => {
-    if (item && item.spot_number) {
-      const key = `${item.spot_number.toUpperCase()}-${item.start_time || item.created_at}`;
-      if (!mergedMap.has(key)) {
-        mergedMap.set(key, item);
-      }
-    }
-  });
-
-  const merged = Array.from(mergedMap.values()).sort((a, b) => {
-    const tA = new Date(a.start_time || a.created_at || 0).getTime();
-    const tB = new Date(b.start_time || b.created_at || 0).getTime();
-    return tB - tA;
-  });
-
-  // 🎯 智慧清理歷史紀錄：永遠只有當前停車（activeCleanNum）為進行中，其餘舊紀錄自動標註結束時間
-  let hasFoundActive = false;
-  const finalizedList = merged.map((item) => {
-    const itemNum = (item.spot_number || '').toUpperCase();
-    const isCurrentActive = activeCleanNum && itemNum === activeCleanNum && !hasFoundActive;
-
-    if (!item.end_time) {
-      if (isCurrentActive) {
-        hasFoundActive = true;
-        return item; // 唯一真實進行中
-      } else {
-        const sTime = item.start_time || item.created_at || new Date().toISOString();
-        const eTime = new Date(new Date(sTime).getTime() + 15 * 60 * 1000).toISOString();
-        return { ...item, end_time: eTime };
-      }
-    }
-    return item;
-  });
-
-  return finalizedList;
 }
 
 export interface FavoriteSpot {
@@ -867,31 +995,40 @@ function saveLocalMessage(msg: any) {
  * @param limit 限制取得的筆數
  * @returns 訊息列表
  */
-export async function getCommunityMessages(limit: number = 50): Promise<any[]> {
-  if (useLocalSimulation) {
-    return getLocalMessages();
-  }
+export async function getCommunityMessages(limit: number = 100): Promise<any[]> {
   try {
-    // 使用 supabase 以 bypass RLS 限制，確保能讀取到寫入的聊天紀錄
+    const url = `${SUPABASE_URL}/rest/v1/community_messages?select=*&order=created_at.asc&limit=${limit}`;
+    const res = await fetch(url, {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data;
+      }
+    }
+  } catch (e: any) {
+    console.warn("[getCommunityMessages] REST fetch error:", e);
+  }
+
+  try {
     const { data, error } = await supabase
       .from('community_messages')
       .select('*')
       .order('created_at', { ascending: true })
       .limit(limit);
 
-    if (error) {
-      // 找不到 Table 的錯誤代碼或訊息，自動 fallback
-      if (error.code === 'PGRST116' || error.message.includes('relation') || error.message.includes('not find') || error.message.includes('column')) {
-        console.warn("[getCommunityMessages] 找不到 Supabase 資料表，已自動切換至本地模擬數據模式！");
-        return getLocalMessages();
-      }
-      throw error;
+    if (!error && Array.isArray(data) && data.length > 0) {
+      return data;
     }
-    return data || [];
   } catch (e: any) {
-    console.warn("[getCommunityMessages] Supabase 讀取異常，已 Fallback 至本地模擬模式:", e.message);
-    return getLocalMessages();
+    console.warn("[getCommunityMessages] Supabase client error:", e);
   }
+
+  return getLocalMessages();
 }
 
 /**
@@ -900,65 +1037,53 @@ export async function getCommunityMessages(limit: number = 50): Promise<any[]> {
  * @returns 寫入的訊息紀錄
  */
 export async function sendCommunityMessage(msg: SendMessageData): Promise<any> {
-  if (useLocalSimulation) {
-    const mockSent = {
-      id: "local-" + Math.random().toString(36).substr(2, 9),
-      user_id: msg.user_id || 'guest',
-      user_name: msg.user_name,
-      user_avatar: msg.user_avatar || '',
-      role: msg.role,
-      content: msg.content,
-      created_at: new Date().toISOString()
-    };
-    saveLocalMessage(mockSent);
-    return mockSent;
+  const newRecord = {
+    user_id: msg.user_id || null,
+    user_name: msg.user_name || '使用者',
+    user_avatar: msg.user_avatar || '',
+    role: msg.role || 'student',
+    content: msg.content,
+    created_at: new Date().toISOString()
+  };
+
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/community_messages`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      },
+      body: JSON.stringify(newRecord)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data[0];
+      }
+      return { id: `msg-${Date.now()}`, ...newRecord };
+    }
+  } catch (e: any) {
+    console.warn("[sendCommunityMessage] REST insert error:", e);
   }
+
   try {
     const { data, error } = await supabase
       .from('community_messages')
-      .insert({
-        user_id: msg.user_id || null,
-        user_name: msg.user_name,
-        user_avatar: msg.user_avatar || '',
-        role: msg.role,
-        content: msg.content,
-        created_at: new Date().toISOString()
-      })
+      .insert(newRecord)
       .select()
       .single();
 
-    if (error) {
-      if (error.code === 'PGRST116' || error.message.includes('relation') || error.message.includes('not find') || error.message.includes('column')) {
-        console.warn("[sendCommunityMessage] 找不到 Supabase 資料表，已將發言寫入本地 localStorage！");
-        const mockSent = {
-          id: "local-" + Math.random().toString(36).substr(2, 9),
-          user_id: msg.user_id || 'guest',
-          user_name: msg.user_name,
-          user_avatar: msg.user_avatar || '',
-          role: msg.role,
-          content: msg.content,
-          created_at: new Date().toISOString()
-        };
-        saveLocalMessage(mockSent);
-        return mockSent;
-      }
-      throw error;
-    }
-    return data;
+    if (!error && data) return data;
   } catch (e: any) {
-    console.warn("[sendCommunityMessage] Supabase 寫入異常，已 Fallback 至本地模擬模式:", e.message);
-    const mockSent = {
-      id: "local-" + Math.random().toString(36).substr(2, 9),
-      user_id: msg.user_id || 'guest',
-      user_name: msg.user_name,
-      user_avatar: msg.user_avatar || '',
-      role: msg.role,
-      content: msg.content,
-      created_at: new Date().toISOString()
-    };
-    saveLocalMessage(mockSent);
-    return mockSent;
+    console.warn("[sendCommunityMessage] Supabase client insert error:", e);
   }
+
+  const fallback = { id: `local-${Date.now()}`, ...newRecord };
+  saveLocalMessage(fallback);
+  return fallback;
 }
 
 /**
