@@ -504,10 +504,11 @@ export interface SpotActionResult {
 /**
  * 預約/停入車位
  * @param spotId 車位 ID 或編號
+ * @param userId 停放的使用者 ID
  * @returns 操作結果
  */
-export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
-  const localUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
+export async function reserveSpot(spotId: string, userId?: string | null): Promise<SpotActionResult> {
+  const currentUserId = userId || (typeof window !== 'undefined' ? localStorage.getItem('motopark_user_id') : null) || null;
   const directNow = new Date().toISOString();
   const directSpotNumber = normalizeSpotNumber(spotId);
   const stdSpotId = getStandardizedSpotId(spotId);
@@ -516,7 +517,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
   recordParkingStart(stdSpotId, directSpotNumber, directNow);
 
   try {
-    const updateBody = { status: 'occupied', occupied_by: null, occupied_at: directNow };
+    const updateBody = { status: 'occupied', occupied_by: currentUserId, occupied_at: directNow };
     // 🎯 雙表全佔用保險：同時對 car_parking_spots 與 parking_spots 發送佔用
     await Promise.allSettled([
       rawDirectUpdate('car_parking_spots', spotId, updateBody),
@@ -527,7 +528,7 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
     try {
       const isCarSpot = spotId.startsWith('CAR-') || spotId.includes('ZHUGU');
       const historySpotId = isCarSpot ? 'LOT-ROADSIDE-4' : stdSpotId;
-      const historyUserId = '6e4f4702-d7bf-4686-bf70-8676ceb5317f';
+      const historyUserId = currentUserId || 'b43c7f6a-3a08-4629-acbc-e204cd266feb';
       await supabase.from('parking_history').insert({
         user_id: historyUserId,
         spot_id: historySpotId,
@@ -542,14 +543,14 @@ export async function reserveSpot(spotId: string): Promise<SpotActionResult> {
     return {
       success: true,
       message: `Reserved ${directSpotNumber}`,
-      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
+      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: currentUserId, occupied_at: directNow }
     };
   } catch (err: any) {
     console.error('reserveSpot error:', err);
     return {
       success: true,
       message: `Reserved ${directSpotNumber} (Local)`,
-      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: localUserId, occupied_at: directNow }
+      spot: { id: stdSpotId, number: directSpotNumber, status: 'mine', occupied_by: currentUserId, occupied_at: directNow }
     };
   }
 }
@@ -637,7 +638,7 @@ export interface FormattedHistoryItem {
 export function recordParkingStart(spotId: string, spotNumber: string, startTimeIso: string = new Date().toISOString()): HistoryRecord[] {
   const cleanNum = normalizeSpotNumber(spotNumber || spotId);
   const stdId = getStandardizedSpotId(spotId);
-  const localUserId = 'c811008c-077b-4ebc-8db7-2cd18129d584';
+  const localUserId = (typeof window !== 'undefined' ? localStorage.getItem('motopark_user_id') : null) || 'guest';
 
   let currentList: HistoryRecord[] = [];
   try {
@@ -720,6 +721,7 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   const activeSpotId = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_id') : null;
   const activeSpotNum = typeof window !== 'undefined' ? localStorage.getItem('my_active_spot_number') : null;
   const activeCleanNum = normalizeSpotNumber(activeSpotNum || activeSpotId);
+  const localUserId = (typeof window !== 'undefined' ? localStorage.getItem('motopark_user_id') : null) || 'guest';
 
   let localList: HistoryRecord[] = [];
   try {
@@ -745,7 +747,7 @@ export async function getHistory(): Promise<HistoryRecord[]> {
     } else if (activeIndex === -1) {
       normalizedList.unshift({
         id: `hist-live-${Date.now()}`,
-        user_id: 'c811008c-077b-4ebc-8db7-2cd18129d584',
+        user_id: localUserId,
         spot_id: activeSpotId,
         spot_number: activeCleanNum,
         start_time: new Date().toISOString(),
@@ -758,31 +760,31 @@ export async function getHistory(): Promise<HistoryRecord[]> {
   return normalizedList;
 }
 
+export function parseSafeDate(d: any): Date {
+  if (!d) return new Date();
+  if (d instanceof Date) return isNaN(d.getTime()) ? new Date() : d;
+  const parsed = new Date(d);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+export function formatTime(timeStr?: string): string {
+  if (!timeStr) return "";
+  try {
+    const date = parseSafeDate(timeStr);
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    const seconds = date.getSeconds().toString().padStart(2, "0");
+    return `${hours}:${minutes}:${seconds}`;
+  } catch {
+    return "";
+  }
+}
+
 /**
  * 🎯 統一獲取已格式化完成的歷史紀錄列表（供 UI 直接渲染，消除全站重複格式化代碼）
  */
 export async function getFormattedHistory(): Promise<FormattedHistoryItem[]> {
   const list = await getHistory();
-
-  const parseSafeDate = (d: any): Date => {
-    if (!d) return new Date();
-    if (d instanceof Date) return isNaN(d.getTime()) ? new Date() : d;
-    const parsed = new Date(d);
-    return isNaN(parsed.getTime()) ? new Date() : parsed;
-  };
-
-  const formatTime = (timeStr?: string): string => {
-    if (!timeStr) return "";
-    try {
-      const date = parseSafeDate(timeStr);
-      const hours = date.getHours().toString().padStart(2, "0");
-      const minutes = date.getMinutes().toString().padStart(2, "0");
-      const seconds = date.getSeconds().toString().padStart(2, "0");
-      return `${hours}:${minutes}:${seconds}`;
-    } catch {
-      return "";
-    }
-  };
 
   return list.map(h => {
     const baseDateString = h.start_time || h.created_at;

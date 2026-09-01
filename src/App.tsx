@@ -289,51 +289,21 @@ export default function App() {
       const occupiedClean = api.normalizeSpotNumber(occupiedSpot.number || occupiedSpot.id);
       if (occupiedSpot.id === spotId || occupiedSpot.id === stdScanId || occupiedClean === cleanScan) {
         // 再次掃描同一個已停放車位 → 自動完成離場與結算！
+        clearActiveParkingSession(spotId, occupiedClean);
         try {
-          console.log(`[QR Code 離場] 再次掃描已停放車位 ${occupiedSpot.number}，自動觸發離場與結算...`);
           await api.releaseSpot(spotId);
-          
-          localStorage.removeItem('my_active_spot_id');
-          localStorage.removeItem('my_active_spot_number');
-          setSpots(prev => prev.map(s => (s.id === spotId || s.id === stdScanId || api.normalizeSpotNumber(s.number) === cleanScan) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-          setStartTime(null);
-          fetchSpots();
-          fetchHistory();
-          
-          openModal({
-            type: 'alert',
-            title: '離場成功通知',
-            message: `🎉 已透過二維碼 (QR Code) 成功完成車位 ${occupiedSpot.number} 離場與結算！感謝您的使用，祝您一路平安！`
-          });
-          setView('map');
-          return;
+          await fetchSpots();
         } catch (err: any) {
-          console.warn('[QR Code 離場] 後端 API 離場失敗，切換 Supabase 直連離場:', err);
-          try {
-            const targetTable = spotId.startsWith('CAR-') ? 'car_parking_spots' : 'parking_spots';
-            await api.supabase
-              .from(targetTable)
-              .update({ status: 'available', occupied_by: null, occupied_at: null })
-              .or(`id.eq.${spotId},id.eq.${stdScanId}`);
-
-            localStorage.removeItem('my_active_spot_id');
-            localStorage.removeItem('my_active_spot_number');
-            setSpots(prev => prev.map(s => (s.id === spotId || s.id === stdScanId || api.normalizeSpotNumber(s.number) === cleanScan) ? { ...s, status: 'available' as const, occupied_by: null, occupied_at: null } : s));
-            setStartTime(null);
-            fetchSpots();
-            fetchHistory();
-
-            openModal({
-              type: 'alert',
-              title: '離場成功通知',
-              message: `🎉 已透過二維碼 (QR Code) 成功完成車位 ${occupiedSpot.number} 離場與結算！`
-            });
-            setView('map');
-            return;
-          } catch (fallbackReleaseErr) {
-            console.error('[QR Code 離場] 直連離場也失敗:', fallbackReleaseErr);
-          }
+          console.warn('[QR Code 離場] API 連線警示:', err);
         }
+
+        openModal({
+          type: 'alert',
+          title: '離場成功通知',
+          message: `🎉 已透過二維碼 (QR Code) 成功完成車位 ${occupiedSpot.number} 離場與結算！感謝您的使用，祝您一路平安！`
+        });
+        setView('map');
+        return;
       } else {
         // 如果有進場警告，自動釋放原車位並完成新車位登記，消去超時告警
         if (entryNotice) {
@@ -355,8 +325,6 @@ export default function App() {
     if (!spot) return;
 
     // 🎯 100% 保證樂觀更新：秒消警告、秒設時間、秒跳轉狀態頁！
-    const now = new Date();
-    const myUserId = user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
     const cleanNum = api.normalizeSpotNumber(spot.number || spot.id);
     const isCar = cleanNum.startsWith('CAR-') || stdScanId.startsWith('CAR-');
     
@@ -392,7 +360,7 @@ export default function App() {
   };
 
   const startActiveParkingSession = (spotId: string, cleanNum: string, isCar: boolean, now: Date = new Date()) => {
-    const myUserId = user?.id || 'c811008c-077b-4ebc-8db7-2cd18129d584';
+    const myUserId = user?.id || (typeof window !== 'undefined' ? localStorage.getItem('motopark_user_id') : null) || null;
     const stdSpotId = api.getStandardizedSpotId(spotId, isCar ? 'car' : 'moto');
 
     wasParkingActiveRef.current = true;
@@ -419,7 +387,7 @@ export default function App() {
     setEntryNotice(null);
     setView('status');
 
-    api.reserveSpot(stdSpotId).then(() => {
+    api.reserveSpot(stdSpotId, myUserId).then(() => {
       fetchSpots();
       fetchHistory();
     }).catch(console.warn);
@@ -613,12 +581,13 @@ export default function App() {
       try {
         data = await api.getMe();
       } catch {
+        const guestId = 'guest-' + Math.random().toString(36).substring(2, 9);
         data = {
-          id: 'c811008c-077b-4ebc-8db7-2cd18129d584',
-          name: '轉角夜空',
+          id: guestId,
+          name: '訪客同學',
           avatar: '',
           role: 'student',
-          plate_number: 'ABC-123'
+          plate_number: '—'
         };
       }
       setUser(data);
